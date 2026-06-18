@@ -3,7 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RepairReport } from "@/lib/types";
 
-export type VoiceState = "idle" | "asking" | "listening" | "confirming" | "done";
+export type VoiceState =
+  | "idle"
+  | "asking"
+  | "recording"
+  | "transcribing"
+  | "confirming"
+  | "done";
 
 export interface VoiceField {
   key: keyof RepairReport;
@@ -31,7 +37,7 @@ export const STEP_FIELDS: Record<number, VoiceField[]> = {
   ],
   1: [
     { key: "valveMake",                label: "valve make",                  type: "text" },
-    { key: "valveSerialNumber",         label: "valve serial number",         type: "text" },
+    { key: "valveSerialNumber",        label: "valve serial number",         type: "text" },
     { key: "valveModelSize",           label: "valve model and size",        type: "text" },
     { key: "valveClassConnection",     label: "valve class and connection",  type: "text" },
     { key: "valvePackingConfiguration",label: "packing configuration",       type: "text" },
@@ -54,20 +60,20 @@ export const STEP_FIELDS: Record<number, VoiceField[]> = {
     { key: "failActionAsFound",        label: "fail action",                 type: "select", options: ["Open", "Close"] },
   ],
   2: [
-    { key: "benchSetAsLeft",        label: "bench set as left",      type: "text" },
-    { key: "openSignalAsLeft",      label: "open signal as left",    type: "text" },
-    { key: "closedSignalAsLeft",    label: "closed signal as left",  type: "text" },
-    { key: "supplyPressureAsLeft",  label: "supply pressure as left",type: "text" },
-    { key: "failActionAsLeft",      label: "fail action as left",    type: "select", options: ["Open", "Close"] },
-    { key: "testWitness",           label: "test witness",           type: "text" },
-    { key: "testTechnician",        label: "test technician",        type: "text" },
-    { key: "gasTestPressure",       label: "gas test pressure",      type: "text" },
-    { key: "gasTestResult",         label: "gas test result",        type: "text" },
-    { key: "seatLeakClass",         label: "seat leak class",        type: "text" },
-    { key: "allowableLeakage",      label: "allowable leakage",      type: "text" },
-    { key: "actualLeakage",         label: "actual leakage",         type: "text" },
-    { key: "notes",                 label: "notes",                  type: "text" },
-    { key: "recommendations",       label: "recommendations",        type: "text" },
+    { key: "benchSetAsLeft",        label: "bench set as left",       type: "text" },
+    { key: "openSignalAsLeft",      label: "open signal as left",     type: "text" },
+    { key: "closedSignalAsLeft",    label: "closed signal as left",   type: "text" },
+    { key: "supplyPressureAsLeft",  label: "supply pressure as left", type: "text" },
+    { key: "failActionAsLeft",      label: "fail action as left",     type: "select", options: ["Open", "Close"] },
+    { key: "testWitness",           label: "test witness",            type: "text" },
+    { key: "testTechnician",        label: "test technician",         type: "text" },
+    { key: "gasTestPressure",       label: "gas test pressure",       type: "text" },
+    { key: "gasTestResult",         label: "gas test result",         type: "text" },
+    { key: "seatLeakClass",         label: "seat leak class",         type: "text" },
+    { key: "allowableLeakage",      label: "allowable leakage",       type: "text" },
+    { key: "actualLeakage",         label: "actual leakage",          type: "text" },
+    { key: "notes",                 label: "notes",                   type: "text" },
+    { key: "recommendations",       label: "recommendations",         type: "text" },
   ],
 };
 
@@ -82,131 +88,125 @@ function speakAsync(text: string): Promise<void> {
     function doSpeak() {
       const utt = new SpeechSynthesisUtterance(text);
       utt.rate = 0.95;
-
-      // Fallback: resolve after estimated duration so the loop never hangs
       const fallback = setTimeout(() => { synth.cancel(); resolve(); }, text.length * 80 + 2500);
       utt.onend = () => { clearTimeout(fallback); resolve(); };
       utt.onerror = () => { clearTimeout(fallback); resolve(); };
       synth.speak(utt);
-      // Chrome bug: synthesis can pause when tab loses focus briefly
       setTimeout(() => { if (synth.paused) synth.resume(); }, 150);
     }
 
-    // Voices may not be loaded yet on first page load
     if (synth.getVoices().length > 0) {
       doSpeak();
     } else {
       let done = false;
       const go = () => { if (!done) { done = true; doSpeak(); } };
       synth.addEventListener("voiceschanged", go, { once: true });
-      setTimeout(go, 600); // fallback if voiceschanged never fires
+      setTimeout(go, 600);
     }
   });
 }
 
-// ── STT ───────────────────────────────────────────────────────────────────────
+const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function listenAsync(
-  abortSignal: AbortSignal,
-  pendingRef: React.MutableRefObject<((v: string) => void) | null>
-): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    if (abortSignal.aborted) { reject(new Error("aborted")); return; }
+// ── Audio recording with silence detection ────────────────────────────────────
 
-    let settled = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let currentRec: any = null;
+async function recordAudio(
+  abort: AbortSignal,
+  stopRef: React.MutableRefObject<(() => void) | null>
+): Promise<Blob> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  if (abort.aborted) { stream.getTracks().forEach((t) => t.stop()); throw new Error("aborted"); }
 
-    function settle(value: string) {
-      if (settled) return;
-      settled = true;
-      pendingRef.current = null;
-      try { currentRec?.abort(); } catch {}
-      resolve(value);
+  const mimeType =
+    MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" :
+    MediaRecorder.isTypeSupported("audio/mp4")              ? "audio/mp4"              : "";
+
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+  // Silence detection via Web Audio
+  const audioCtx = new AudioContext();
+  const source = audioCtx.createMediaStreamSource(stream);
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+
+  return new Promise<Blob>((resolve, reject) => {
+    let hasSpoken = false;
+    let silenceStart: number | null = null;
+    let stopped = false;
+
+    function stop() {
+      if (stopped) return;
+      stopped = true;
+      stopRef.current = null;
+      clearInterval(silenceTimer);
+      clearTimeout(maxTimer);
+      recorder.stop();
     }
 
-    pendingRef.current = settle;
+    stopRef.current = stop;
 
-    function startRec() {
-      if (settled || abortSignal.aborted) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SR) return;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rec: any = new SR();
-      currentRec = rec;
-      rec.lang = "en-US";
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.maxAlternatives = 1;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rec.onresult = (e: any) => settle(e.results[0][0].transcript);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      rec.onerror = (e: any) => {
-        if (settled || abortSignal.aborted) return;
-        if (e.error === "not-allowed") {
-          // Mic permission denied — surface to the caller
-          settled = true;
-          pendingRef.current = null;
-          reject(new Error("not-allowed"));
-          return;
-        }
-        if (["no-speech", "audio-capture", "network"].includes(e.error)) {
-          setTimeout(startRec, 300);
-        }
-      };
-      rec.onend = () => {
-        if (!settled && !abortSignal.aborted) setTimeout(startRec, 100);
-      };
-
-      try {
-        rec.start();
-        console.log("[VoiceAgent] recognition started");
-      } catch (e) {
-        console.error("[VoiceAgent] rec.start() threw:", e);
-        if (!settled && !abortSignal.aborted) setTimeout(startRec, 500);
+    const silenceTimer = setInterval(() => {
+      analyser.getByteFrequencyData(freqData);
+      const rms = Math.sqrt(freqData.reduce((s, v) => s + v * v, 0) / freqData.length);
+      if (rms > 10) {
+        hasSpoken = true;
+        silenceStart = null;
+      } else if (hasSpoken) {
+        if (!silenceStart) silenceStart = Date.now();
+        else if (Date.now() - silenceStart > 1500) stop();
       }
-    }
+    }, 100);
 
-    startRec();
+    // Hard cap at 12 seconds
+    const maxTimer = setTimeout(stop, 12000);
 
-    abortSignal.addEventListener("abort", () => {
-      settled = true;
-      pendingRef.current = null;
-      try { currentRec?.abort(); } catch {}
+    recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      audioCtx.close();
+      resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
+    };
+
+    recorder.start(100);
+
+    abort.addEventListener("abort", () => {
+      stop();
       reject(new Error("aborted"));
     });
   });
 }
 
-// ── Parsers ───────────────────────────────────────────────────────────────────
+// ── Groq transcription ────────────────────────────────────────────────────────
 
-function detectYesNo(t: string): "yes" | "no" | null {
-  const s = t.toLowerCase();
-  if (/\b(yes|yeah|yep|yup|correct|right|confirm|affirmative)\b/.test(s)) return "yes";
-  if (/\b(no|nope|wrong|incorrect|redo|again|retry)\b/.test(s)) return "no";
-  return null;
+async function transcribeBlob(blob: Blob): Promise<string> {
+  const ext = blob.type.includes("mp4") ? "m4a" : "webm";
+  const form = new FormData();
+  form.append("audio", blob, `recording.${ext}`);
+  const res = await fetch("/api/transcribe", { method: "POST", body: form });
+  if (!res.ok) throw new Error("Transcription failed");
+  const data = await res.json();
+  return (data.text ?? "").trim();
 }
 
-function detectCommand(t: string): "skip" | "stop" | "repeat" | null {
+// ── Parsers ───────────────────────────────────────────────────────────────────
+
+function detectCommand(t: string): "skip" | "stop" | null {
   const s = t.toLowerCase();
-  if (/\b(skip|pass|next field)\b/.test(s)) return "skip";
+  if (/\b(skip|pass|next)\b/.test(s)) return "skip";
   if (/\b(stop|exit|quit|cancel)\b/.test(s)) return "stop";
-  if (/\b(repeat|say again)\b/.test(s)) return "repeat";
   return null;
 }
 
 function parseSelectValue(t: string, options: string[]): string {
   const s = t.toLowerCase();
-  for (const opt of options) {
-    if (s.includes(opt.toLowerCase())) return opt;
-  }
-  if (options.includes("Open") && /\bopen(s)?\b/.test(s)) return "Open";
-  if (options.includes("Close") && /\bclos(e|ed|es)?\b/.test(s)) return "Close";
-  if (options.includes("Yes") && /\b(yes|yeah|yep|yup)\b/.test(s)) return "Yes";
-  if (options.includes("No") && /\b(no|nope)\b/.test(s)) return "No";
+  for (const opt of options) { if (s.includes(opt.toLowerCase())) return opt; }
+  if (options.includes("Open")  && /\bopen(s)?\b/.test(s))          return "Open";
+  if (options.includes("Close") && /\bclos(e|ed|es)?\b/.test(s))    return "Close";
+  if (options.includes("Yes")   && /\b(yes|yeah|yep|yup)\b/.test(s)) return "Yes";
+  if (options.includes("No")    && /\b(no|nope)\b/.test(s))          return "No";
   return t;
 }
 
@@ -227,26 +227,35 @@ function normalizeDate(t: string): string {
 
 // ── Main async loop ───────────────────────────────────────────────────────────
 
-interface UIUpdate {
+interface UIState {
   state: VoiceState;
   fieldIndex: number;
-  transcript: string;
-  waitingForYesNo: boolean;
+  pendingValue: string;
+}
+
+function waitForConfirm(
+  ref: React.MutableRefObject<((v: boolean) => void) | null>,
+  abort: AbortSignal
+): Promise<boolean> {
+  return new Promise<boolean>((resolve, reject) => {
+    ref.current = resolve;
+    abort.addEventListener("abort", () => { ref.current = null; reject(new Error("aborted")); });
+  });
 }
 
 async function voiceLoop(
   step: number,
   fields: VoiceField[],
   onUpdate: (patch: Partial<RepairReport>) => void,
-  setUI: (u: UIUpdate) => void,
+  setUI: (u: UIState) => void,
   abort: AbortSignal,
-  pendingRef: React.MutableRefObject<((v: string) => void) | null>
+  stopRecordingRef: React.MutableRefObject<(() => void) | null>,
+  confirmRef: React.MutableRefObject<((v: boolean) => void) | null>
 ) {
   if (!fields.length) return;
 
-  await speakAsync(
-    `Voice mode started. I'll guide you through ${STEP_NAMES[step] ?? "this step"}. Say skip to skip a field, or stop to exit.`
-  );
+  setUI({ state: "asking", fieldIndex: 0, pendingValue: "" });
+  await speakAsync(`Voice mode started. I'll guide you through ${STEP_NAMES[step] ?? "this step"}.`);
   if (abort.aborted) return;
 
   for (let i = 0; i < fields.length; i++) {
@@ -254,60 +263,72 @@ async function voiceLoop(
     let retrying = false;
 
     fieldLoop: while (!abort.aborted) {
-      // Ask
-      setUI({ state: "asking", fieldIndex: i, transcript: "", waitingForYesNo: false });
-      let question = retrying
+      // Speak the field question
+      setUI({ state: "asking", fieldIndex: i, pendingValue: "" });
+      const question = retrying
         ? `Let's try again. What is the ${field.label}?`
         : `What is the ${field.label}?`;
-      if (field.type === "select" && field.options) question += ` Say ${field.options.join(" or ")}.`;
-      await speakAsync(question);
+      if (field.type === "select" && field.options) {
+        await speakAsync(`${question} Say ${field.options.join(" or ")}.`);
+      } else {
+        await speakAsync(question);
+      }
       if (abort.aborted) return;
-      // Brief pause so the audio hardware fully releases before the mic opens
-      await new Promise<void>((r) => setTimeout(r, 400));
+      await pause(300);
       if (abort.aborted) return;
 
-      // Listen for answer
-      setUI({ state: "listening", fieldIndex: i, transcript: "", waitingForYesNo: false });
-      let heard: string;
-      try { heard = await listenAsync(abort, pendingRef); }
-      catch (err: unknown) {
-        if ((err as Error).message === "not-allowed") {
-          alert("Microphone access was denied. Please allow microphone access in your browser settings and try again.");
-        }
-        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+      // Record
+      setUI({ state: "recording", fieldIndex: i, pendingValue: "" });
+      let blob: Blob;
+      try {
+        blob = await recordAudio(abort, stopRecordingRef);
+      } catch {
+        setUI({ state: "idle", fieldIndex: 0, pendingValue: "" });
         return;
       }
 
-      const cmd = detectCommand(heard);
-      if (cmd === "stop") { setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false }); return; }
+      // Transcribe via Groq
+      setUI({ state: "transcribing", fieldIndex: i, pendingValue: "" });
+      let text: string;
+      try {
+        text = await transcribeBlob(blob);
+      } catch {
+        // transcription failed — retry the field
+        retrying = true;
+        await speakAsync("Sorry, I couldn't process that. Let's try again.");
+        continue;
+      }
+
+      if (!text) {
+        retrying = true;
+        await speakAsync("I didn't catch that. Let's try again.");
+        continue;
+      }
+
+      // Check for commands in the transcription
+      const cmd = detectCommand(text);
+      if (cmd === "stop") { setUI({ state: "idle", fieldIndex: 0, pendingValue: "" }); return; }
       if (cmd === "skip") break fieldLoop;
-      if (cmd === "repeat") { retrying = false; continue; }
 
-      let value = heard.trim();
-      if (field.type === "select" && field.options) value = parseSelectValue(heard, field.options);
-      if (field.type === "date") value = normalizeDate(heard);
+      // Parse the value
+      let value = text;
+      if (field.type === "select" && field.options) value = parseSelectValue(text, field.options);
+      if (field.type === "date") value = normalizeDate(text);
 
-      // Confirm
-      setUI({ state: "confirming", fieldIndex: i, transcript: value, waitingForYesNo: false });
-      await speakAsync(`I heard: ${value}. Say yes to confirm, or no to try again.`);
-      if (abort.aborted) return;
-      await new Promise<void>((r) => setTimeout(r, 400));
-      if (abort.aborted) return;
+      // Show confirmation
+      setUI({ state: "confirming", fieldIndex: i, pendingValue: value });
+      await speakAsync(`I heard: ${value}.`);
 
-      setUI({ state: "listening", fieldIndex: i, transcript: value, waitingForYesNo: true });
-      let conf: string;
-      try { conf = await listenAsync(abort, pendingRef); }
-      catch (err: unknown) {
-        if ((err as Error).message === "not-allowed") {
-          alert("Microphone access was denied. Please allow microphone access in your browser settings and try again.");
-        }
-        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+      // Wait for tap (YES or NO buttons in overlay)
+      let confirmed: boolean;
+      try {
+        confirmed = await waitForConfirm(confirmRef, abort);
+      } catch {
+        setUI({ state: "idle", fieldIndex: 0, pendingValue: "" });
         return;
       }
 
-      if (detectCommand(conf) === "stop") { setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false }); return; }
-
-      if (detectYesNo(conf) === "yes") {
+      if (confirmed) {
         onUpdate({ [field.key]: value } as Partial<RepairReport>);
         break fieldLoop;
       } else {
@@ -317,9 +338,9 @@ async function voiceLoop(
   }
 
   if (!abort.aborted) {
-    setUI({ state: "done", fieldIndex: fields.length - 1, transcript: "", waitingForYesNo: false });
-    await speakAsync(`All ${STEP_NAMES[step] ?? ""} fields complete. Voice mode finished.`);
-    setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+    setUI({ state: "done", fieldIndex: fields.length - 1, pendingValue: "" });
+    await speakAsync(`All ${STEP_NAMES[step] ?? ""} fields complete.`);
+    setUI({ state: "idle", fieldIndex: 0, pendingValue: "" });
   }
 }
 
@@ -328,13 +349,12 @@ async function voiceLoop(
 export interface VoiceAgentReturn {
   state: VoiceState;
   fieldIndex: number;
-  transcript: string;
-  waitingForYesNo: boolean;
+  pendingValue: string;
   currentField: VoiceField | null;
   totalFields: number;
-  supported: boolean;
   start: () => void;
   stop: () => void;
+  stopRecording: () => void;
   pressConfirm: () => void;
   pressRetry: () => void;
 }
@@ -343,42 +363,34 @@ export function useVoiceAgent(
   step: number,
   onUpdate: (patch: Partial<RepairReport>) => void
 ): VoiceAgentReturn {
-  const [ui, setUI] = useState<UIUpdate>({
-    state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false,
-  });
+  const [ui, setUI] = useState<UIState>({ state: "idle", fieldIndex: 0, pendingValue: "" });
 
-  const abortRef = useRef<AbortController | null>(null);
-  const pendingRef = useRef<((v: string) => void) | null>(null);
-  const onUpdateRef = useRef(onUpdate);
-  onUpdateRef.current = onUpdate;
-
-  const supported = typeof window !== "undefined" &&
-    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  const abortRef        = useRef<AbortController | null>(null);
+  const stopRecordingRef = useRef<(() => void) | null>(null);
+  const confirmRef      = useRef<((v: boolean) => void) | null>(null);
+  const onUpdateRef     = useRef(onUpdate);
+  onUpdateRef.current   = onUpdate;
 
   const fields = STEP_FIELDS[step] ?? [];
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
-    pendingRef.current = null;
+    stopRecordingRef.current = null;
+    confirmRef.current = null;
     if (typeof window !== "undefined") window.speechSynthesis?.cancel();
-    setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+    setUI({ state: "idle", fieldIndex: 0, pendingValue: "" });
   }, []);
 
   const start = useCallback(() => {
-    if (!supported) return;
-    abortRef.current?.abort();
+    stop();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    setUI({ state: "asking", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+    setUI({ state: "asking", fieldIndex: 0, pendingValue: "" });
 
-    // Request mic permission NOW while still inside the user-gesture handler.
-    // On iOS Safari, SpeechRecognition.start() is silently blocked if called
-    // several awaits away from the original tap. getUserMedia anchors permission
-    // to this gesture so the later rec.start() calls succeed.
-    navigator.mediaDevices?.getUserMedia({ audio: true })
+    // Request mic permission within user gesture before async work begins
+    navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream) => {
-        // Permission granted — close the test stream and start the loop.
         stream.getTracks().forEach((t) => t.stop());
         voiceLoop(
           step,
@@ -386,21 +398,21 @@ export function useVoiceAgent(
           (patch) => onUpdateRef.current(patch),
           setUI,
           ctrl.signal,
-          pendingRef
+          stopRecordingRef,
+          confirmRef
         ).catch(() => {});
       })
       .catch(() => {
         alert("Microphone access was denied. Please allow microphone access in your browser settings, then try again.");
-        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+        setUI({ state: "idle", fieldIndex: 0, pendingValue: "" });
       });
-  }, [supported, step]);
+  }, [step, stop]);
 
-  const pressConfirm = useCallback(() => { pendingRef.current?.("yes"); }, []);
-  const pressRetry   = useCallback(() => { pendingRef.current?.("no"); }, []);
+  const stopRecording = useCallback(() => { stopRecordingRef.current?.(); }, []);
+  const pressConfirm  = useCallback(() => { confirmRef.current?.(true); }, []);
+  const pressRetry    = useCallback(() => { confirmRef.current?.(false); }, []);
 
-  // Stop voice when user changes wizard step
   useEffect(() => { stop(); }, [step, stop]);
-
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -412,9 +424,9 @@ export function useVoiceAgent(
     ...ui,
     currentField: ui.state !== "idle" ? (fields[ui.fieldIndex] ?? null) : null,
     totalFields: fields.length,
-    supported,
     start,
     stop,
+    stopRecording,
     pressConfirm,
     pressRetry,
   };
