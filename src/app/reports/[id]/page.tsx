@@ -21,6 +21,8 @@ import { normalizeReport } from "@/lib/reportNumber";
 import { exportRepairPdf, exportAsFoundPdf } from "@/lib/exports/pdf";
 import { exportRepairJson, exportAsFoundJson } from "@/lib/exports/json";
 import { exportIrisCsv } from "@/lib/exports/iris";
+import { useVoiceAgent } from "@/hooks/useVoiceAgent";
+import VoiceAgentOverlay from "@/components/VoiceAgentOverlay";
 
 export default function ReportWizard() {
   const { id } = useParams<{ id: string }>();
@@ -49,6 +51,8 @@ export default function ReportWizard() {
     report && hasAsFoundData(report) && !hasAsLeftData(report) ? 2 : 0;
   const step = manualStep ?? autoStep;
   const setStep = setManualStep;
+
+  const voice = useVoiceAgent(step, update);
 
   const completed = useMemo(() => {
     if (!report) return [false, false, false, false];
@@ -610,6 +614,9 @@ export default function ReportWizard() {
           </div>
         )}
       </main>
+
+      {/* Voice agent — only on steps 0-2, not review */}
+      {step < 3 && <VoiceAgentOverlay voice={voice} step={step} />}
     </div>
   );
 }
