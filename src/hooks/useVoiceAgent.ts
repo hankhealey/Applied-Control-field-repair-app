@@ -76,14 +76,31 @@ export const STEP_FIELDS: Record<number, VoiceField[]> = {
 function speakAsync(text: string): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !window.speechSynthesis) { resolve(); return; }
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 0.95;
-    utt.onend = () => resolve();
-    utt.onerror = () => resolve();
-    window.speechSynthesis.speak(utt);
-    // Chrome bug: synthesis can pause when tab is briefly unfocused
-    setTimeout(() => { if (window.speechSynthesis?.paused) window.speechSynthesis.resume(); }, 150);
+    const synth = window.speechSynthesis;
+    synth.cancel();
+
+    function doSpeak() {
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 0.95;
+
+      // Fallback: resolve after estimated duration so the loop never hangs
+      const fallback = setTimeout(() => { synth.cancel(); resolve(); }, text.length * 80 + 2500);
+      utt.onend = () => { clearTimeout(fallback); resolve(); };
+      utt.onerror = () => { clearTimeout(fallback); resolve(); };
+      synth.speak(utt);
+      // Chrome bug: synthesis can pause when tab loses focus briefly
+      setTimeout(() => { if (synth.paused) synth.resume(); }, 150);
+    }
+
+    // Voices may not be loaded yet on first page load
+    if (synth.getVoices().length > 0) {
+      doSpeak();
+    } else {
+      let done = false;
+      const go = () => { if (!done) { done = true; doSpeak(); } };
+      synth.addEventListener("voiceschanged", go, { once: true });
+      setTimeout(go, 600); // fallback if voiceschanged never fires
+    }
   });
 }
 
@@ -129,6 +146,13 @@ function listenAsync(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onerror = (e: any) => {
         if (settled || abortSignal.aborted) return;
+        if (e.error === "not-allowed") {
+          // Mic permission denied — surface to the caller
+          settled = true;
+          pendingRef.current = null;
+          reject(new Error("not-allowed"));
+          return;
+        }
         if (["no-speech", "audio-capture", "network"].includes(e.error)) {
           setTimeout(startRec, 300);
         }
@@ -237,7 +261,13 @@ async function voiceLoop(
       setUI({ state: "listening", fieldIndex: i, transcript: "", waitingForYesNo: false });
       let heard: string;
       try { heard = await listenAsync(abort, pendingRef); }
-      catch { return; }
+      catch (err: unknown) {
+        if ((err as Error).message === "not-allowed") {
+          alert("Microphone access was denied. Please allow microphone access in your browser settings and try again.");
+        }
+        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+        return;
+      }
 
       const cmd = detectCommand(heard);
       if (cmd === "stop") { setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false }); return; }
@@ -256,7 +286,13 @@ async function voiceLoop(
       setUI({ state: "listening", fieldIndex: i, transcript: value, waitingForYesNo: true });
       let conf: string;
       try { conf = await listenAsync(abort, pendingRef); }
-      catch { return; }
+      catch (err: unknown) {
+        if ((err as Error).message === "not-allowed") {
+          alert("Microphone access was denied. Please allow microphone access in your browser settings and try again.");
+        }
+        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+        return;
+      }
 
       if (detectCommand(conf) === "stop") { setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false }); return; }
 
