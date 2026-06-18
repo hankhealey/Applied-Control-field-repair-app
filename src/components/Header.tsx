@@ -21,7 +21,7 @@ export default function Header() {
           className="h-8 w-auto"
           priority
         />
-        <p className="text-xs font-medium tracking-widest text-zinc-400">
+        <p className="hidden sm:block text-xs font-medium tracking-widest text-zinc-400">
           FIELD REPAIR REPORTS
         </p>
       </button>

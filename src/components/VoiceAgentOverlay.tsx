@@ -23,7 +23,7 @@ export default function VoiceAgentOverlay({ voice, step }: { voice: VoiceAgentRe
     <>
       {/* Active panel */}
       {isActive && (
-        <div className="fixed bottom-24 right-4 z-50 w-72 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl">
+        <div className="fixed bottom-20 left-2 right-2 z-50 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl sm:bottom-24 sm:left-auto sm:right-4 sm:w-72">
 
           {/* Header */}
           <div className="flex items-center justify-between bg-[#0C1E30] px-4 py-3">

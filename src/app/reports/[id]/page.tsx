@@ -117,7 +117,7 @@ export default function ReportWizard() {
   return (
     <div className="min-h-screen bg-zinc-50">
       <Header />
-      <main className="mx-auto max-w-3xl px-6 py-6">
+      <main className="mx-auto max-w-3xl px-3 py-4 sm:px-6 sm:py-6">
         <div className="mb-4 flex items-center justify-between">
           <button onClick={() => router.push("/")} className="text-sm font-medium text-[#154A8A]">
             ← Back to Reports

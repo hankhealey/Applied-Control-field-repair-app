@@ -99,7 +99,10 @@ export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const isImport = pathname.startsWith("/import");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.innerWidth >= 640;
+  });
 
   return (
     <>

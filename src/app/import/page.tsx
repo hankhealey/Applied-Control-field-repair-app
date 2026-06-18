@@ -103,7 +103,7 @@ export default function ImportPage() {
   return (
     <div className="min-h-screen bg-zinc-50">
       <Header />
-      <main className="mx-auto max-w-5xl px-6 py-6">
+      <main className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-6">
 
         {/* Title */}
         <div className="mb-6">

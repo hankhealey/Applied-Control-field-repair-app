@@ -94,7 +94,7 @@ export default function Home() {
     <div className="min-h-screen bg-zinc-50">
       <Header />
 
-      <main className="mx-auto max-w-3xl px-6 py-6">
+      <main className="mx-auto max-w-3xl px-3 py-4 sm:px-6 sm:py-6">
         {/* Site filter */}
         <div className="mb-6 flex items-end justify-between gap-4">
           <div className="flex-1">
@@ -122,22 +122,22 @@ export default function Home() {
 
         {/* Toolbar — changes based on mode */}
         {mode === "idle" && (
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-sm font-semibold tracking-wide text-zinc-500">
               REPORTS ({reports.length})
             </h2>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {reports.length > 0 && (
                 <>
                   <button
                     onClick={() => enterMode("export")}
-                    className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-800"
+                    className="flex-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 sm:flex-none sm:py-1.5"
                   >
                     Export to IRIS
                   </button>
                   <button
                     onClick={() => enterMode("delete")}
-                    className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-600"
+                    className="flex-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600 sm:flex-none sm:py-1.5"
                   >
                     Delete
                   </button>
@@ -145,7 +145,7 @@ export default function Home() {
               )}
               <button
                 onClick={handleNewReport}
-                className="rounded-lg bg-[#154A8A] px-4 py-1.5 text-sm font-semibold text-white"
+                className="flex-1 rounded-lg bg-[#154A8A] px-4 py-2 text-sm font-semibold text-white sm:flex-none sm:py-1.5"
               >
                 + New Report
               </button>
@@ -158,27 +158,16 @@ export default function Home() {
             <p className="mb-3 text-sm font-semibold text-amber-800">
               Select reports to export to IRIS CSV
             </p>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                onClick={toggleSelectAll}
-                className="text-sm font-medium text-amber-700 underline"
-              >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <button onClick={toggleSelectAll} className="text-left text-sm font-medium text-amber-700 underline">
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button
-                  onClick={cancelMode}
-                  className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
-                >
+                <button onClick={cancelMode} className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 sm:flex-none">
                   Cancel
                 </button>
-                <button
-                  onClick={handleExportConfirm}
-                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                >
-                  {selected.size === 0
-                    ? `Export All (${reports.length})`
-                    : `Export ${selected.size} Selected`}
+                <button onClick={handleExportConfirm} className="flex-1 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none">
+                  {selected.size === 0 ? `Export All (${reports.length})` : `Export ${selected.size}`}
                 </button>
               </div>
             </div>
@@ -190,28 +179,16 @@ export default function Home() {
             <p className="mb-3 text-sm font-semibold text-red-700">
               Select reports to delete
             </p>
-            <div className="flex items-center justify-between gap-2">
-              <button
-                onClick={toggleSelectAll}
-                className="text-sm font-medium text-red-600 underline"
-              >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <button onClick={toggleSelectAll} className="text-left text-sm font-medium text-red-600 underline">
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button
-                  onClick={cancelMode}
-                  className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
-                >
+                <button onClick={cancelMode} className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 sm:flex-none">
                   Cancel
                 </button>
-                <button
-                  onClick={handleDeleteConfirm}
-                  disabled={selected.size === 0}
-                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                >
-                  {selected.size === 0
-                    ? "Select to delete"
-                    : `Delete ${selected.size}`}
+                <button onClick={handleDeleteConfirm} disabled={selected.size === 0} className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none">
+                  {selected.size === 0 ? "Select to delete" : `Delete ${selected.size}`}
                 </button>
               </div>
             </div>
