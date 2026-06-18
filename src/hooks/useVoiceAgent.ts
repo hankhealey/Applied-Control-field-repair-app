@@ -161,7 +161,13 @@ function listenAsync(
         if (!settled && !abortSignal.aborted) setTimeout(startRec, 100);
       };
 
-      try { rec.start(); } catch {}
+      try {
+        rec.start();
+        console.log("[VoiceAgent] recognition started");
+      } catch (e) {
+        console.error("[VoiceAgent] rec.start() threw:", e);
+        if (!settled && !abortSignal.aborted) setTimeout(startRec, 500);
+      }
     }
 
     startRec();
@@ -256,6 +262,9 @@ async function voiceLoop(
       if (field.type === "select" && field.options) question += ` Say ${field.options.join(" or ")}.`;
       await speakAsync(question);
       if (abort.aborted) return;
+      // Brief pause so the audio hardware fully releases before the mic opens
+      await new Promise<void>((r) => setTimeout(r, 400));
+      if (abort.aborted) return;
 
       // Listen for answer
       setUI({ state: "listening", fieldIndex: i, transcript: "", waitingForYesNo: false });
@@ -281,6 +290,8 @@ async function voiceLoop(
       // Confirm
       setUI({ state: "confirming", fieldIndex: i, transcript: value, waitingForYesNo: false });
       await speakAsync(`I heard: ${value}. Say yes to confirm, or no to try again.`);
+      if (abort.aborted) return;
+      await new Promise<void>((r) => setTimeout(r, 400));
       if (abort.aborted) return;
 
       setUI({ state: "listening", fieldIndex: i, transcript: value, waitingForYesNo: true });
@@ -360,14 +371,28 @@ export function useVoiceAgent(
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setUI({ state: "asking", fieldIndex: 0, transcript: "", waitingForYesNo: false });
-    voiceLoop(
-      step,
-      STEP_FIELDS[step] ?? [],
-      (patch) => onUpdateRef.current(patch),
-      setUI,
-      ctrl.signal,
-      pendingRef
-    ).catch(() => {});
+
+    // Request mic permission NOW while still inside the user-gesture handler.
+    // On iOS Safari, SpeechRecognition.start() is silently blocked if called
+    // several awaits away from the original tap. getUserMedia anchors permission
+    // to this gesture so the later rec.start() calls succeed.
+    navigator.mediaDevices?.getUserMedia({ audio: true })
+      .then((stream) => {
+        // Permission granted — close the test stream and start the loop.
+        stream.getTracks().forEach((t) => t.stop());
+        voiceLoop(
+          step,
+          STEP_FIELDS[step] ?? [],
+          (patch) => onUpdateRef.current(patch),
+          setUI,
+          ctrl.signal,
+          pendingRef
+        ).catch(() => {});
+      })
+      .catch(() => {
+        alert("Microphone access was denied. Please allow microphone access in your browser settings, then try again.");
+        setUI({ state: "idle", fieldIndex: 0, transcript: "", waitingForYesNo: false });
+      });
   }, [supported, step]);
 
   const pressConfirm = useCallback(() => { pendingRef.current?.("yes"); }, []);
