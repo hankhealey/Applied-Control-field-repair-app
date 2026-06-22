@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { ThemeToggle } from "./ThemeToggle";
 
 export default function Header() {
   const router = useRouter();
@@ -13,8 +14,13 @@ export default function Header() {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-5 py-3">
-      {/* Applied Control logo — acts as a subtle home button */}
+    <header
+      className="flex items-center justify-between px-5 py-3"
+      style={{
+        background: "var(--bg-card)",
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
       <button
         onClick={() => router.push("/")}
         className="flex items-center gap-3 opacity-90 transition-opacity hover:opacity-100"
@@ -28,22 +34,36 @@ export default function Header() {
           className="h-8 w-auto"
           priority
         />
-        <p className="hidden sm:block text-xs font-medium tracking-widest text-zinc-400">
+        <span
+          className="hidden sm:block text-[11px] font-semibold tracking-[0.1em]"
+          style={{ color: "var(--text-label)" }}
+        >
           FIELD REPAIR REPORTS
-        </p>
+        </span>
       </button>
 
-      {/* Sign out */}
-      <button
-        onClick={handleLogout}
-        title="Sign out"
-        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
-      >
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <path d="M5 2H2a1 1 0 00-1 1v8a1 1 0 001 1h3M9 10l3-3-3-3M12 7H5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        <span className="hidden sm:inline">Sign out</span>
-      </button>
+      <div className="flex items-center gap-1">
+        <ThemeToggle />
+
+        <div className="mx-1.5 h-4 w-px" style={{ background: "var(--border-solid)" }} />
+
+        <button
+          onClick={handleLogout}
+          title="Sign out"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
+          style={{ color: "var(--text-secondary)" }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path
+              d="M5 2H2a1 1 0 00-1 1v8a1 1 0 001 1h3M9 10l3-3-3-3M12 7H5"
+              stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+            />
+          </svg>
+          <span className="hidden sm:inline">Sign out</span>
+        </button>
+      </div>
     </header>
   );
 }

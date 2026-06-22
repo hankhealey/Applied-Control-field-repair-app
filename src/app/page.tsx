@@ -20,9 +20,7 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("idle");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    ensureSeeded().then(() => setReady(true));
-  }, []);
+  useEffect(() => { ensureSeeded().then(() => setReady(true)); }, []);
 
   const sites = useLiveQuery(() => db.sites.toArray(), [], []);
   const allReports = useLiveQuery(() => db.reports.toArray(), [], []);
@@ -32,30 +30,15 @@ export default function Home() {
     .filter((r) => siteFilter === "all" || r.siteId === siteFilter)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  function enterMode(m: Mode) {
-    setMode(m);
-    setSelected(new Set());
-  }
-
-  function cancelMode() {
-    setMode("idle");
-    setSelected(new Set());
-  }
+  function enterMode(m: Mode) { setMode(m); setSelected(new Set()); }
+  function cancelMode() { setMode("idle"); setSelected(new Set()); }
 
   function toggleSelect(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+    setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
   function toggleSelectAll() {
-    if (selected.size === reports.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(reports.map((r) => r.id)));
-    }
+    setSelected(selected.size === reports.length ? new Set() : new Set(reports.map((r) => r.id)));
   }
 
   async function handleNewReport() {
@@ -74,16 +57,16 @@ export default function Home() {
   async function handleDeleteConfirm() {
     if (selected.size === 0) return;
     const count = selected.size;
-    if (!confirm(`Delete ${count} report${count > 1 ? "s" : ""} and all ${count > 1 ? "their" : "its"} findings/photos?`)) return;
+    if (!confirm(`Delete ${count} report${count > 1 ? "s" : ""} and all their findings/photos?`)) return;
     await Promise.all([...selected].map((id) => deleteReportCascade(id)));
     cancelMode();
   }
 
   if (!ready) {
     return (
-      <div className="min-h-screen bg-zinc-50">
+      <div style={{ background: "var(--bg-main)" }} className="min-h-screen">
         <Header />
-        <p className="p-6 text-zinc-500">Loading…</p>
+        <p className="p-6" style={{ color: "var(--text-secondary)" }}>Loading…</p>
       </div>
     );
   }
@@ -91,53 +74,53 @@ export default function Home() {
   const allSelected = selected.size === reports.length && reports.length > 0;
 
   return (
-    <div className="min-h-screen bg-zinc-50">
+    <div className="min-h-screen" style={{ background: "var(--bg-main)" }}>
       <Header />
 
-      <main className="mx-auto max-w-3xl px-3 py-4 sm:px-6 sm:py-6">
-        {/* Site filter */}
-        <div className="mb-6 flex items-end justify-between gap-4">
+      <main className="mx-auto max-w-3xl px-3 py-5 sm:px-6 sm:py-6">
+
+        {/* ── Site filter ── */}
+        <div className="mb-5 flex items-end gap-3">
           <div className="flex-1">
-            <label className="mb-1 block text-sm font-medium text-zinc-600">Site</label>
-            <select
-              className="input"
-              value={siteFilter}
-              onChange={(e) => setSiteFilter(e.target.value)}
-            >
+            <label className="label-sm mb-1.5 block">Site</label>
+            <select className="input" value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)}>
               <option value="all">All sites</option>
-              {sites?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
+              {sites?.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
             </select>
           </div>
           <button
             onClick={() => router.push("/sites")}
-            className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
+            className="rounded-lg border px-4 py-2 text-sm font-semibold transition-colors"
+            style={{
+              background: "var(--bg-card)",
+              borderColor: "var(--border-solid)",
+              color: "var(--text-secondary)",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-primary)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
           >
             Manage
           </button>
         </div>
 
-        {/* Toolbar — changes based on mode */}
+        {/* ── Toolbar ── */}
         {mode === "idle" && (
-          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-sm font-semibold tracking-wide text-zinc-500">
-              REPORTS ({reports.length})
-            </h2>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="label-sm">Reports ({reports.length})</h2>
             <div className="flex flex-wrap items-center gap-2">
               {reports.length > 0 && (
                 <>
                   <button
                     onClick={() => enterMode("export")}
-                    className="flex-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 sm:flex-none sm:py-1.5"
+                    className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors sm:flex-none sm:py-1.5"
+                    style={{ background: "#FEF3C7", color: "#92400E", border: "1px solid #FDE68A" }}
                   >
                     Export to IRIS
                   </button>
                   <button
                     onClick={() => enterMode("delete")}
-                    className="flex-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600 sm:flex-none sm:py-1.5"
+                    className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors sm:flex-none sm:py-1.5"
+                    style={{ background: "#FEF2F2", color: "#991B1B", border: "1px solid #FECACA" }}
                   >
                     Delete
                   </button>
@@ -145,7 +128,10 @@ export default function Home() {
               )}
               <button
                 onClick={handleNewReport}
-                className="flex-1 rounded-lg bg-[#154A8A] px-4 py-2 text-sm font-semibold text-white sm:flex-none sm:py-1.5"
+                className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors sm:flex-none sm:py-1.5"
+                style={{ background: "var(--accent)" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--accent-hover)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "var(--accent)")}
               >
                 + New Report
               </button>
@@ -154,19 +140,19 @@ export default function Home() {
         )}
 
         {mode === "export" && (
-          <div className="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
-            <p className="mb-3 text-sm font-semibold text-amber-800">
+          <div className="mb-4 rounded-xl border p-4" style={{ background: "#FFFBEB", borderColor: "#FDE68A" }}>
+            <p className="mb-3 text-sm font-semibold" style={{ color: "#92400E" }}>
               Select reports to export to IRIS CSV
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <button onClick={toggleSelectAll} className="text-left text-sm font-medium text-amber-700 underline">
+              <button onClick={toggleSelectAll} className="text-left text-sm font-medium underline" style={{ color: "#B45309" }}>
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button onClick={cancelMode} className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 sm:flex-none">
+                <button onClick={cancelMode} className="flex-1 rounded-lg border px-4 py-2 text-sm font-semibold sm:flex-none" style={{ background: "var(--bg-card)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}>
                   Cancel
                 </button>
-                <button onClick={handleExportConfirm} className="flex-1 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none">
+                <button onClick={handleExportConfirm} className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white sm:flex-none" style={{ background: "#D97706" }}>
                   {selected.size === 0 ? `Export All (${reports.length})` : `Export ${selected.size}`}
                 </button>
               </div>
@@ -175,19 +161,19 @@ export default function Home() {
         )}
 
         {mode === "delete" && (
-          <div className="mb-3 rounded-xl border border-red-300 bg-red-50 p-4">
-            <p className="mb-3 text-sm font-semibold text-red-700">
+          <div className="mb-4 rounded-xl border p-4" style={{ background: "#FEF2F2", borderColor: "#FECACA" }}>
+            <p className="mb-3 text-sm font-semibold" style={{ color: "#991B1B" }}>
               Select reports to delete
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <button onClick={toggleSelectAll} className="text-left text-sm font-medium text-red-600 underline">
+              <button onClick={toggleSelectAll} className="text-left text-sm font-medium underline" style={{ color: "#DC2626" }}>
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button onClick={cancelMode} className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 sm:flex-none">
+                <button onClick={cancelMode} className="flex-1 rounded-lg border px-4 py-2 text-sm font-semibold sm:flex-none" style={{ background: "var(--bg-card)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}>
                   Cancel
                 </button>
-                <button onClick={handleDeleteConfirm} disabled={selected.size === 0} className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none">
+                <button onClick={handleDeleteConfirm} disabled={selected.size === 0} className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none" style={{ background: "#DC2626" }}>
                   {selected.size === 0 ? "Select to delete" : `Delete ${selected.size}`}
                 </button>
               </div>
@@ -195,58 +181,61 @@ export default function Home() {
           </div>
         )}
 
-        {/* Report list */}
-        <div className="flex flex-col gap-4">
+        {/* ── Report list ── */}
+        <div className="flex flex-col gap-3">
           {reports.map((report) => {
             const asFound = hasAsFoundData(report);
             const asLeft = hasAsLeftData(report);
             const isSelected = selected.has(report.id);
-            const isExportMode = mode === "export";
+            const inSelectionMode = mode === "export" || mode === "delete";
             const isDeleteMode = mode === "delete";
-            const inSelectionMode = isExportMode || isDeleteMode;
 
-            const borderColor = isSelected
-              ? isDeleteMode
-                ? "border-red-400 ring-1 ring-red-300"
-                : "border-amber-400 ring-1 ring-amber-300"
-              : "border-zinc-200";
+            const ringColor = isSelected
+              ? isDeleteMode ? "rgba(220,38,38,0.4)" : "rgba(217,119,6,0.4)"
+              : "transparent";
 
             return (
               <div
                 key={report.id}
-                onClick={() => {
-                  if (inSelectionMode) {
-                    toggleSelect(report.id);
-                  } else {
-                    router.push(`/reports/${report.id}`);
-                  }
+                onClick={() => inSelectionMode ? toggleSelect(report.id) : router.push(`/reports/${report.id}`)}
+                className="flex cursor-pointer items-stretch rounded-xl transition-all"
+                style={{
+                  background: "var(--bg-card)",
+                  border: `1px solid ${isSelected ? (isDeleteMode ? "#FECACA" : "#FDE68A") : "var(--border)"}`,
+                  boxShadow: isSelected ? `0 0 0 2px ${ringColor}, var(--shadow-sm)` : "var(--shadow-sm)",
                 }}
-                className={`flex cursor-pointer items-stretch rounded-xl border bg-white p-5 shadow-sm hover:border-blue-300 ${borderColor}`}
+                onMouseEnter={(e) => {
+                  if (!isSelected) (e.currentTarget as HTMLDivElement).style.borderColor = "var(--accent)";
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border)";
+                }}
               >
-                {/* Checkbox — only visible in selection modes */}
                 {inSelectionMode && (
-                  <div className="mr-4 flex items-center">
+                  <div className="ml-4 flex items-center">
                     <input
                       type="checkbox"
                       checked={isSelected}
                       onChange={() => toggleSelect(report.id)}
                       onClick={(e) => e.stopPropagation()}
-                      className={`h-4 w-4 rounded border-zinc-300 ${isDeleteMode ? "accent-red-500" : "accent-amber-500"}`}
+                      className="h-4 w-4 rounded"
+                      style={{ accentColor: isDeleteMode ? "#DC2626" : "#D97706" }}
                     />
                   </div>
                 )}
 
-                {/* Card body */}
-                <div className="flex-1">
+                <div className="flex-1 p-5">
                   <div className="mb-2 flex items-center gap-3">
-                    <span className="text-lg font-bold text-zinc-900">{report.reportNumber}</span>
+                    <span className="text-base font-bold" style={{ color: "var(--text-primary)" }}>
+                      {report.reportNumber}
+                    </span>
                     <StatusBadge status={report.status} />
                   </div>
-                  <p className="text-zinc-600">
-                    {report.customer || "No customer"} • {report.siteTitle || "No site"}
+                  <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
+                    {report.customer || "No customer"} · {report.siteTitle || "No site"}
                   </p>
-                  <p className="mb-3 text-sm text-zinc-500">
-                    Tag {report.tagOrUnit || "—"} • {report.repairDate}
+                  <p className="mb-3 text-sm" style={{ color: "var(--text-label)" }}>
+                    Tag {report.tagOrUnit || "—"} · {report.repairDate}
                   </p>
                   <div className="flex gap-2">
                     <Pill active={asFound} label="As Found" />
@@ -256,8 +245,11 @@ export default function Home() {
               </div>
             );
           })}
+
           {reports.length === 0 && (
-            <p className="text-zinc-500">No reports yet.</p>
+            <p className="py-8 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
+              No reports yet. Create your first report above.
+            </p>
           )}
         </div>
       </main>
@@ -268,12 +260,14 @@ export default function Home() {
 function Pill({ active, label }: { active: boolean; label: string }) {
   return (
     <span
-      className={`rounded-full px-3 py-1 text-xs font-medium ${
-        active ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-400"
-      }`}
+      className="rounded-full px-2.5 py-0.5 text-xs font-medium"
+      style={
+        active
+          ? { background: "#ECFDF5", color: "#065F46" }
+          : { background: "var(--bg-surface)", color: "var(--text-label)" }
+      }
     >
-      {active ? "✓ " : ""}
-      {label}
+      {active ? "✓ " : ""}{label}
     </span>
   );
 }
