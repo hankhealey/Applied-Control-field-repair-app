@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { computeSessionToken, SESSION_COOKIE } from "@/lib/auth";
 
-// Paths that never require authentication
 const PUBLIC = ["/login", "/privacy", "/api/auth"];
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC.some((p) => pathname.startsWith(p))) {
@@ -35,7 +34,6 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Skip Next.js internals and all static files
   matcher: [
     "/((?!_next/static|_next/image|favicon\\.ico|.*\\.png$|.*\\.ico$|.*\\.mjs$|.*\\.css$|.*\\.map$).*)",
   ],
