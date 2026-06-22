@@ -74,7 +74,7 @@ export default function Home() {
   async function handleDeleteConfirm() {
     if (selected.size === 0) return;
     const count = selected.size;
-    if (!confirm(`Delete ${count} report${count > 1 ? "s" : ""} and all their findings/photos?`)) return;
+    if (!confirm(`Delete ${count} report${count > 1 ? "s" : ""} and all ${count > 1 ? "their" : "its"} findings/photos?`)) return;
     await Promise.all([...selected].map((id) => deleteReportCascade(id)));
     cancelMode();
   }

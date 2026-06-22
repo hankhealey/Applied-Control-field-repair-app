@@ -66,7 +66,7 @@ export default function VoiceAgentOverlay({ voice, step }: { voice: VoiceAgentRe
                 <p className="mt-0.5 text-[10px] text-zinc-400">Say: {currentField.options.join(" or ")}</p>
               )}
               {currentField.type === "date" && (
-                <p className="mt-0.5 text-[10px] text-zinc-400">E.g. &ldquo;June 15 2025&rdquo;</p>
+                <p className="mt-0.5 text-[10px] text-zinc-400">E.g. &ldquo;June 15, 2025&rdquo;</p>
               )}
             </div>
           )}

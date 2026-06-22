@@ -211,7 +211,7 @@ function page1(r: RepairReport) {
         </div>
         <div class="panel-row-quad">
           <div class="quad-label">Test Date / Technician</div><div class="quad-value">${esc(r.testDate)} ${esc(r.testTechnician)}</div>
-          <div class="quad-label">Pkg/Gst Test Pressure / Pass-Fail</div><div class="quad-value">${esc(r.gasTestPressure)} / ${esc(r.gasTestResult)}</div>
+          <div class="quad-label">Gas Test Pressure / Pass-Fail</div><div class="quad-value">${esc(r.gasTestPressure)} / ${esc(r.gasTestResult)}</div>
         </div>
         <div class="panel-row-quad">
           <div class="quad-label">Diagnostics Completed AF / AL</div><div class="quad-value">AF ${r.diagnosticsCompletedAsFound ? "Yes" : "No"} AL ${r.diagnosticsCompletedAsLeft ? "Yes" : "No"}</div>
