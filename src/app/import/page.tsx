@@ -2,40 +2,40 @@
 
 import { useRef, useState } from "react";
 import Header from "@/components/Header";
-import { parsePdfFile, ParsedPdfReport } from "@/lib/imports/pdfParser";
 import { exportIrisCsvFromParsed } from "@/lib/exports/iris";
+import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
 
 // ── Field definitions for the preview table ───────────────────────────────────
 const PREVIEW_FIELDS: { key: keyof ParsedPdfReport; label: string }[] = [
-  { key: "tagOrUnit",              label: "Tag / Unit" },
-  { key: "customer",               label: "Customer" },
-  { key: "siteTitle",              label: "Site" },
-  { key: "repairDate",             label: "Date" },
-  { key: "technician",             label: "Technician" },
-  { key: "process",                label: "Process" },
-  { key: "emrReference",           label: "EMR Ref." },
-  { key: "crmodReference",         label: "CRMoD Ref." },
-  { key: "valveMake",              label: "Valve Make" },
-  { key: "valveSerialNumber",      label: "Valve S/N" },
-  { key: "valveModelSize",         label: "Valve Model/Size" },
-  { key: "valveClassConnection",   label: "Class/Conn." },
-  { key: "valveFlowDirection",     label: "Flow Dir." },
+  { key: "tagOrUnit", label: "Tag / Unit" },
+  { key: "customer", label: "Customer" },
+  { key: "siteTitle", label: "Site" },
+  { key: "repairDate", label: "Date" },
+  { key: "technician", label: "Technician" },
+  { key: "process", label: "Process" },
+  { key: "emrReference", label: "EMR Ref." },
+  { key: "crmodReference", label: "CRMoD Ref." },
+  { key: "valveMake", label: "Valve Make" },
+  { key: "valveSerialNumber", label: "Valve S/N" },
+  { key: "valveModelSize", label: "Valve Model/Size" },
+  { key: "valveClassConnection", label: "Class/Conn." },
+  { key: "valveFlowDirection", label: "Flow Dir." },
   { key: "valvePackingConfiguration", label: "Packing" },
-  { key: "valveTrimCharPort",      label: "Trim/Port" },
-  { key: "actuatorMake",           label: "Actuator Make" },
-  { key: "actuatorSerialNumber",   label: "Actuator S/N" },
-  { key: "actuatorModelSize",      label: "Act. Model/Size" },
-  { key: "positionerMake",         label: "Positioner Make" },
+  { key: "valveTrimCharPort", label: "Trim/Port" },
+  { key: "actuatorMake", label: "Actuator Make" },
+  { key: "actuatorSerialNumber", label: "Actuator S/N" },
+  { key: "actuatorModelSize", label: "Act. Model/Size" },
+  { key: "positionerMake", label: "Positioner Make" },
   { key: "positionerSerialNumber", label: "Positioner S/N" },
-  { key: "positionerModelAction",  label: "Pos. Model/Action" },
-  { key: "ratedTravel",            label: "Rated Travel" },
-  { key: "benchSetAsLeft",         label: "Bench Set (AL)" },
-  { key: "openSignalAsLeft",       label: "Signal Open (AL)" },
-  { key: "closedSignalAsLeft",     label: "Signal Closed (AL)" },
-  { key: "supplyPressureAsLeft",   label: "Supply Press. (AL)" },
-  { key: "failActionAsLeft",       label: "Fail Action (AL)" },
-  { key: "actuatorAirAction",      label: "Actuator Air (AL)" },
-  { key: "seatLeakClass",          label: "Seat Leak Class" },
+  { key: "positionerModelAction", label: "Pos. Model/Action" },
+  { key: "ratedTravel", label: "Rated Travel" },
+  { key: "benchSetAsLeft", label: "Bench Set (AL)" },
+  { key: "openSignalAsLeft", label: "Signal Open (AL)" },
+  { key: "closedSignalAsLeft", label: "Signal Closed (AL)" },
+  { key: "supplyPressureAsLeft", label: "Supply Press. (AL)" },
+  { key: "failActionAsLeft", label: "Fail Action (AL)" },
+  { key: "actuatorAirAction", label: "Actuator Air (AL)" },
+  { key: "seatLeakClass", label: "Seat Leak Class" },
 ];
 
 interface FileEntry {
@@ -47,7 +47,9 @@ interface FileEntry {
 
 export default function ImportPage() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [editing, setEditing] = useState<Record<string, Partial<ParsedPdfReport>>>({});
+  const [editing, setEditing] = useState<
+    Record<string, Partial<ParsedPdfReport>>
+  >({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -63,20 +65,20 @@ export default function ImportPage() {
 
   async function parseFile(file: File) {
     setEntries((prev) =>
-      prev.map((e) => e.file === file ? { ...e, status: "parsing" } : e)
+      prev.map((e) => (e.file === file ? { ...e, status: "parsing" } : e)),
     );
     try {
       const result = await parsePdfFile(file);
       setEntries((prev) =>
-        prev.map((e) => e.file === file ? { ...e, status: "done", result } : e)
+        prev.map((e) =>
+          e.file === file ? { ...e, status: "done", result } : e,
+        ),
       );
     } catch (err) {
       setEntries((prev) =>
         prev.map((e) =>
-          e.file === file
-            ? { ...e, status: "error", error: String(err) }
-            : e
-        )
+          e.file === file ? { ...e, status: "error", error: String(err) } : e,
+        ),
       );
     }
   }
@@ -85,7 +87,11 @@ export default function ImportPage() {
     setEntries((prev) => prev.filter((e) => e.file !== file));
   }
 
-  function updateField(filename: string, key: keyof ParsedPdfReport, value: string) {
+  function updateField(
+    filename: string,
+    key: keyof ParsedPdfReport,
+    value: string,
+  ) {
     setEditing((prev) => ({
       ...prev,
       [filename]: { ...(prev[filename] ?? {}), [key]: value },
@@ -98,24 +104,29 @@ export default function ImportPage() {
   }
 
   const doneEntries = entries.filter((e) => e.status === "done");
-  const mergedResults = doneEntries.map((e) => getMergedResult(e)!).filter(Boolean);
+  const mergedResults = doneEntries
+    .map((e) => getMergedResult(e)!)
+    .filter(Boolean);
 
   return (
     <div className="min-h-screen bg-zinc-50">
       <Header />
       <main className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-6">
-
         {/* Title */}
         <div className="mb-6">
           <h1 className="text-xl font-bold text-zinc-900">PDF → IRIS Import</h1>
           <p className="text-sm text-zinc-500">
-            Upload Applied Control repair report PDFs to extract field data and export as IRIS CSV.
+            Upload Applied Control repair report PDFs to extract field data and
+            export as IRIS CSV.
           </p>
         </div>
 
         {/* Drop zone */}
         <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => {
             e.preventDefault();
@@ -137,13 +148,41 @@ export default function ImportPage() {
             className="hidden"
             onChange={(e) => e.target.files && addFiles(e.target.files)}
           />
-          <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="mb-3 text-zinc-400">
-            <rect x="8" y="4" width="24" height="32" rx="3" stroke="currentColor" strokeWidth="2"/>
-            <path d="M14 14h12M14 19h12M14 24h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-            <path d="M24 4v8h8" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+          <svg
+            width="40"
+            height="40"
+            viewBox="0 0 40 40"
+            fill="none"
+            className="mb-3 text-zinc-400"
+          >
+            <rect
+              x="8"
+              y="4"
+              width="24"
+              height="32"
+              rx="3"
+              stroke="currentColor"
+              strokeWidth="2"
+            />
+            <path
+              d="M14 14h12M14 19h12M14 24h8"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path
+              d="M24 4v8h8"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
           </svg>
-          <p className="text-sm font-semibold text-zinc-600">Drop PDF files here or click to browse</p>
-          <p className="text-xs text-zinc-400">Applied Control repair report PDFs</p>
+          <p className="text-sm font-semibold text-zinc-600">
+            Drop PDF files here or click to browse
+          </p>
+          <p className="text-xs text-zinc-400">
+            Applied Control repair report PDFs
+          </p>
         </div>
 
         {/* File list */}
@@ -156,18 +195,27 @@ export default function ImportPage() {
             </div>
             <div className="divide-y divide-zinc-100">
               {entries.map((entry) => (
-                <div key={entry.file.name} className="flex items-center gap-3 px-4 py-3">
+                <div
+                  key={entry.file.name}
+                  className="flex items-center gap-3 px-4 py-3"
+                >
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-zinc-800">{entry.file.name}</p>
+                    <p className="text-sm font-medium text-zinc-800">
+                      {entry.file.name}
+                    </p>
                     <p className="text-xs text-zinc-400">
                       {(entry.file.size / 1024).toFixed(0)} KB
                     </p>
                     {entry.result?._warnings?.map((w, i) => (
-                      <p key={i} className="mt-0.5 text-xs text-amber-600">{w}</p>
+                      <p key={i} className="mt-0.5 text-xs text-amber-600">
+                        {w}
+                      </p>
                     ))}
                   </div>
                   {entry.status === "parsing" && (
-                    <span className="text-xs font-medium text-blue-600 animate-pulse">Parsing…</span>
+                    <span className="text-xs font-medium text-blue-600 animate-pulse">
+                      Parsing…
+                    </span>
                   )}
                   {entry.status === "done" && (
                     <span className="text-xs font-medium text-emerald-600">
@@ -178,14 +226,17 @@ export default function ImportPage() {
                     </span>
                   )}
                   {entry.status === "error" && (
-                    <span className="text-xs font-medium text-red-600" title={entry.error}>
+                    <span
+                      className="text-xs font-medium text-red-600"
+                      title={entry.error}
+                    >
                       ✗ Error
                     </span>
                   )}
                   {entry.status === "pending" && (
                     <span className="text-xs text-zinc-400">Pending</span>
                   )}
-                  <button
+                  <button type="button"
                     onClick={() => removeEntry(entry.file)}
                     className="text-zinc-300 hover:text-red-500"
                   >
@@ -204,7 +255,7 @@ export default function ImportPage() {
               <h2 className="text-sm font-semibold text-zinc-700">
                 Extracted Data — review and correct before exporting
               </h2>
-              <button
+              <button type="button"
                 onClick={() => exportIrisCsvFromParsed(mergedResults)}
                 className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
               >
@@ -231,7 +282,10 @@ export default function ImportPage() {
                 </thead>
                 <tbody>
                   {PREVIEW_FIELDS.map(({ key, label }) => (
-                    <tr key={key} className="border-b border-zinc-100 hover:bg-zinc-50">
+                    <tr
+                      key={key}
+                      className="border-b border-zinc-100 hover:bg-zinc-50"
+                    >
                       <td className="sticky left-0 bg-white px-3 py-1.5 font-medium text-zinc-500 hover:bg-zinc-50">
                         {label}
                       </td>
@@ -263,7 +317,8 @@ export default function ImportPage() {
             </div>
 
             <p className="mt-2 text-xs text-zinc-400">
-              Click any cell to edit extracted values before exporting. Empty fields were not found in the PDF.
+              Click any cell to edit extracted values before exporting. Empty
+              fields were not found in the PDF.
             </p>
           </div>
         )}

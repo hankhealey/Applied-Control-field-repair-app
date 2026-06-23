@@ -1,11 +1,15 @@
-import { RepairReport } from "./types";
+import type { RepairReport } from "./types";
 
 export const CALIBRATION_PAIRS: Array<{
   asFoundKey: keyof RepairReport;
   asLeftKey: keyof RepairReport;
   label: string;
 }> = [
-  { asFoundKey: "benchSetAsFound", asLeftKey: "benchSetAsLeft", label: "Bench Set" },
+  {
+    asFoundKey: "benchSetAsFound",
+    asLeftKey: "benchSetAsLeft",
+    label: "Bench Set",
+  },
   {
     asFoundKey: "openSignalAsFound",
     asLeftKey: "openSignalAsLeft",

@@ -168,7 +168,9 @@ export const PHOTO_CATEGORIES: PhotoCategory[] = [
   "Other",
 ];
 
-export function deriveActuatorAirAction(failActionAsLeft: YesNoBlank): YesNoBlank {
+export function deriveActuatorAirAction(
+  failActionAsLeft: YesNoBlank,
+): YesNoBlank {
   if (failActionAsLeft === "Close") return "Open";
   if (failActionAsLeft === "Open") return "Close";
   return "";
@@ -184,7 +186,7 @@ export function hasAsFoundData(r: RepairReport): boolean {
       r.openSignalAsFound ||
       r.closedSignalAsFound ||
       r.supplyPressureAsFound ||
-      r.failActionAsFound
+      r.failActionAsFound,
   );
 }
 
@@ -196,6 +198,6 @@ export function hasAsLeftData(r: RepairReport): boolean {
       r.supplyPressureAsLeft ||
       r.failActionAsLeft ||
       r.testWitness ||
-      r.testTechnician
+      r.testTechnician,
   );
 }

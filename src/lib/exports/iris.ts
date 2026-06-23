@@ -1,6 +1,6 @@
 import db from "../db";
-import { RepairReport } from "../types";
 import type { ParsedPdfReport } from "../imports/pdfParser";
+import type { RepairReport } from "../types";
 
 // Indices of "status" columns — IRIS expects these unquoted (e.g. No, Yes)
 // Valve status=11, Actuator status=42, Accessory status=63,
@@ -9,53 +9,159 @@ const STATUS_COLS = new Set([11, 42, 63, 78, 103, 128]);
 
 // Headers exactly as IRIS expects: tab-prefixed, quoted, 153 columns total
 const HEADERS = [
-  "\tTag","\tType","\tArea","\tApplication","\tCriticality",
-  "\tService description","\tLocation","\tGPS coordinates","\tP & ID no.","\tDatasheet no.","\tKeywords",
-  "\tValve status","\tValve manufacturer","\tValve model","\tValve serial number","\tValve vendor asset Id",
-  "\tValve size","\tValve pressure class","\tValve rated travel","\tValve seat material","\tValve leak class",
-  "\tValve port size","\tValve body material","\tValve trim style/number","\tValve plug/disc/gate/ball material",
-  "\tValve stem/shaft material","\tValve stem diameter","\tValve cage material","\tValve packing type/material",
-  "\tValve process fluid","\tCapacity","\tCapacity units","\tSet pressure","\tSet pressure units",
-  "\tInlet size","\tInlet size units","\tInlet rating/type","\tOutlet size","\tOutlet size units",
-  "\tOutlet rating/type","\tOrifice size/letter","\tValve flow direction",
-  "\tActuator status","\tActuator manufacturer","\tActuator model","\tActuator size",
-  "\tActuator serial number","\tActuator vendor asset Id","\tActuator lower bench set",
-  "\tActuator upper bench set","\tActuator nominal supply pressure","\tActuator stroke time",
-  "\tActuator fail action","\tActuator voltage","\tActuator phase","\tActuator torque",
-  "\tActuator Order/PO","\tActuator Speed rating","\tActuator Power supply",
-  "\tActuator Temperature range","\tActuator Motor Current","\tActuator Duty Cycle","\tActuator air",
-  "\tAccessory status","\tAccessories Manufacturer","\tAccessories Model","\tAccessories Serial number",
-  "\tAccessories Vendor asset Id","\tAccessories Gearbox","\tAccessories Volume booster",
-  "\tAccessories Quick release","\tAccessories Solenoid valve","\tAccessories Instrument regulator",
-  "\tAccessories Pressure switch","\tAccessories Position transmitter","\tAccessories Limit switch",
-  "\tAccessories Trip valve","\tAccessories Handwheel",
-  "\tDevice 1 status","\tDevice 1 Type","\tDevice 1 Type (Other)","\tDevice 1 Manufacturer",
-  "\tDevice 1 Model number","\tDevice 1 Model number (other)","\tDevice 1 Serial number",
-  "\tDevice 1 Vendor asset Id","\tDevice 1 Diagnostic tier","\tDevice 1 Supply pressure setpoint",
-  "\tDevice 1 Bleed rate","\tDevice 1 Relay type","\tDevice 1 Bleed type","\tDevice 1 Supply fluid",
-  "\tDevice 1 Other supply fluid","\tDevice 1 Output pressure","\tDevice 1 Instrument action",
-  "\tDevice 1 Bourdon tube range","\tDevice 1 Prop band/fulcrum setting",
-  "\tDevice 1 Instrument actuation frequency","\tDevice 1 Level controller interface",
-  "\tDevice 1 Other level controller interface","\tDevice 1 Level controller action",
-  "\tDevice 1 Level controller vessel connection","\tDevice 1 Vent id",
-  "\tDevice 2 status","\tDevice 2 Type","\tDevice 2 Type (Other)","\tDevice 2 Manufacturer",
-  "\tDevice 2 Model number","\tDevice 2 Model number (other)","\tDevice 2 Serial number",
-  "\tDevice 2 Vendor asset Id","\tDevice 2 Diagnostic tier","\tDevice 2 Supply pressure setpoint",
-  "\tDevice 2 Bleed rate","\tDevice 2 Relay type","\tDevice 2 Bleed type","\tDevice 2 Supply fluid",
-  "\tDevice 2 Other supply fluid","\tDevice 2 Output pressure","\tDevice 2 Instrument action",
-  "\tDevice 2 Bourdon tube range","\tDevice 2 Prop band/fulcrum setting",
-  "\tDevice 2 Instrument actuation frequency","\tDevice 2 Level controller interface",
-  "\tDevice 2 Other level controller interface","\tDevice 2 Level controller action",
-  "\tDevice 2 Level controller vessel connection","\tDevice 2 Vent id",
-  "\tDevice 3 status","\tDevice 3 Type","\tDevice 3 Type (Other)","\tDevice 3 Manufacturer",
-  "\tDevice 3 Model number","\tDevice 3 Model number (other)","\tDevice 3 Serial number",
-  "\tDevice 3 Vendor asset Id","\tDevice 3 Diagnostic tier","\tDevice 3 Supply pressure setpoint",
-  "\tDevice 3 Bleed rate","\tDevice 3 Relay type","\tDevice 3 Bleed type","\tDevice 3 Supply fluid",
-  "\tDevice 3 Other supply fluid","\tDevice 3 Output pressure","\tDevice 3 Instrument action",
-  "\tDevice 3 Bourdon tube range","\tDevice 3 Prop band/fulcrum setting",
-  "\tDevice 3 Instrument actuation frequency","\tDevice 3 Level controller interface",
-  "\tDevice 3 Other level controller interface","\tDevice 3 Level controller action",
-  "\tDevice 3 Level controller vessel connection","\tDevice 3 Vent id",
+  "\tTag",
+  "\tType",
+  "\tArea",
+  "\tApplication",
+  "\tCriticality",
+  "\tService description",
+  "\tLocation",
+  "\tGPS coordinates",
+  "\tP & ID no.",
+  "\tDatasheet no.",
+  "\tKeywords",
+  "\tValve status",
+  "\tValve manufacturer",
+  "\tValve model",
+  "\tValve serial number",
+  "\tValve vendor asset Id",
+  "\tValve size",
+  "\tValve pressure class",
+  "\tValve rated travel",
+  "\tValve seat material",
+  "\tValve leak class",
+  "\tValve port size",
+  "\tValve body material",
+  "\tValve trim style/number",
+  "\tValve plug/disc/gate/ball material",
+  "\tValve stem/shaft material",
+  "\tValve stem diameter",
+  "\tValve cage material",
+  "\tValve packing type/material",
+  "\tValve process fluid",
+  "\tCapacity",
+  "\tCapacity units",
+  "\tSet pressure",
+  "\tSet pressure units",
+  "\tInlet size",
+  "\tInlet size units",
+  "\tInlet rating/type",
+  "\tOutlet size",
+  "\tOutlet size units",
+  "\tOutlet rating/type",
+  "\tOrifice size/letter",
+  "\tValve flow direction",
+  "\tActuator status",
+  "\tActuator manufacturer",
+  "\tActuator model",
+  "\tActuator size",
+  "\tActuator serial number",
+  "\tActuator vendor asset Id",
+  "\tActuator lower bench set",
+  "\tActuator upper bench set",
+  "\tActuator nominal supply pressure",
+  "\tActuator stroke time",
+  "\tActuator fail action",
+  "\tActuator voltage",
+  "\tActuator phase",
+  "\tActuator torque",
+  "\tActuator Order/PO",
+  "\tActuator Speed rating",
+  "\tActuator Power supply",
+  "\tActuator Temperature range",
+  "\tActuator Motor Current",
+  "\tActuator Duty Cycle",
+  "\tActuator air",
+  "\tAccessory status",
+  "\tAccessories Manufacturer",
+  "\tAccessories Model",
+  "\tAccessories Serial number",
+  "\tAccessories Vendor asset Id",
+  "\tAccessories Gearbox",
+  "\tAccessories Volume booster",
+  "\tAccessories Quick release",
+  "\tAccessories Solenoid valve",
+  "\tAccessories Instrument regulator",
+  "\tAccessories Pressure switch",
+  "\tAccessories Position transmitter",
+  "\tAccessories Limit switch",
+  "\tAccessories Trip valve",
+  "\tAccessories Handwheel",
+  "\tDevice 1 status",
+  "\tDevice 1 Type",
+  "\tDevice 1 Type (Other)",
+  "\tDevice 1 Manufacturer",
+  "\tDevice 1 Model number",
+  "\tDevice 1 Model number (other)",
+  "\tDevice 1 Serial number",
+  "\tDevice 1 Vendor asset Id",
+  "\tDevice 1 Diagnostic tier",
+  "\tDevice 1 Supply pressure setpoint",
+  "\tDevice 1 Bleed rate",
+  "\tDevice 1 Relay type",
+  "\tDevice 1 Bleed type",
+  "\tDevice 1 Supply fluid",
+  "\tDevice 1 Other supply fluid",
+  "\tDevice 1 Output pressure",
+  "\tDevice 1 Instrument action",
+  "\tDevice 1 Bourdon tube range",
+  "\tDevice 1 Prop band/fulcrum setting",
+  "\tDevice 1 Instrument actuation frequency",
+  "\tDevice 1 Level controller interface",
+  "\tDevice 1 Other level controller interface",
+  "\tDevice 1 Level controller action",
+  "\tDevice 1 Level controller vessel connection",
+  "\tDevice 1 Vent id",
+  "\tDevice 2 status",
+  "\tDevice 2 Type",
+  "\tDevice 2 Type (Other)",
+  "\tDevice 2 Manufacturer",
+  "\tDevice 2 Model number",
+  "\tDevice 2 Model number (other)",
+  "\tDevice 2 Serial number",
+  "\tDevice 2 Vendor asset Id",
+  "\tDevice 2 Diagnostic tier",
+  "\tDevice 2 Supply pressure setpoint",
+  "\tDevice 2 Bleed rate",
+  "\tDevice 2 Relay type",
+  "\tDevice 2 Bleed type",
+  "\tDevice 2 Supply fluid",
+  "\tDevice 2 Other supply fluid",
+  "\tDevice 2 Output pressure",
+  "\tDevice 2 Instrument action",
+  "\tDevice 2 Bourdon tube range",
+  "\tDevice 2 Prop band/fulcrum setting",
+  "\tDevice 2 Instrument actuation frequency",
+  "\tDevice 2 Level controller interface",
+  "\tDevice 2 Other level controller interface",
+  "\tDevice 2 Level controller action",
+  "\tDevice 2 Level controller vessel connection",
+  "\tDevice 2 Vent id",
+  "\tDevice 3 status",
+  "\tDevice 3 Type",
+  "\tDevice 3 Type (Other)",
+  "\tDevice 3 Manufacturer",
+  "\tDevice 3 Model number",
+  "\tDevice 3 Model number (other)",
+  "\tDevice 3 Serial number",
+  "\tDevice 3 Vendor asset Id",
+  "\tDevice 3 Diagnostic tier",
+  "\tDevice 3 Supply pressure setpoint",
+  "\tDevice 3 Bleed rate",
+  "\tDevice 3 Relay type",
+  "\tDevice 3 Bleed type",
+  "\tDevice 3 Supply fluid",
+  "\tDevice 3 Other supply fluid",
+  "\tDevice 3 Output pressure",
+  "\tDevice 3 Instrument action",
+  "\tDevice 3 Bourdon tube range",
+  "\tDevice 3 Prop band/fulcrum setting",
+  "\tDevice 3 Instrument actuation frequency",
+  "\tDevice 3 Level controller interface",
+  "\tDevice 3 Other level controller interface",
+  "\tDevice 3 Level controller action",
+  "\tDevice 3 Level controller vessel connection",
+  "\tDevice 3 Vent id",
 ]; // 153 columns
 
 // Split "3-15" bench set string into [lower, upper]
@@ -67,7 +173,9 @@ function splitBenchSet(value: string): [string, string] {
 
 // Returns exactly 153 values in column order
 function reportToRow(r: RepairReport): string[] {
-  const [benchLow, benchHigh] = splitBenchSet(r.benchSetAsLeft || r.benchSetAsFound || "");
+  const [benchLow, benchHigh] = splitBenchSet(
+    r.benchSetAsLeft || r.benchSetAsFound || "",
+  );
   const supplyPressure = r.supplyPressureAsLeft || r.supplyPressureAsFound;
   const failAction = r.failActionAsLeft || r.failActionAsFound;
 
@@ -86,74 +194,158 @@ function reportToRow(r: RepairReport): string[] {
     "",
 
     // ── 11-41  Valve (status + 30 fields) ────────────────────────────────────
-    "No",                         // [11] Valve status  ← unquoted by STATUS_COLS
-    r.valveMake,                  // [12]
-    r.valveModelSize,             // [13]
-    r.valveSerialNumber,          // [14]
-    "",                           // [15] vendor asset id
-    r.valveModelSize,             // [16] size
-    r.valveClassConnection,       // [17] pressure class
-    r.ratedTravel,                // [18]
-    "",                           // [19] seat material
-    r.seatLeakClass,              // [20]
-    r.valveTrimCharPort,          // [21] port size
-    "",                           // [22] body material
-    r.valveTrimCharPort,          // [23] trim style
-    "",                           // [24] plug material
-    "",                           // [25] stem material
-    "",                           // [26] stem diameter
-    "",                           // [27] cage material
-    r.valvePackingConfiguration,  // [28]
-    r.process,                    // [29] process fluid
-    "","","","","","","","","","","",  // [30-40] capacity, set pressure, inlet/outlet, orifice
-    r.valveFlowDirection,         // [41]
+    "No", // [11] Valve status  ← unquoted by STATUS_COLS
+    r.valveMake, // [12]
+    r.valveModelSize, // [13]
+    r.valveSerialNumber, // [14]
+    "", // [15] vendor asset id
+    r.valveModelSize, // [16] size
+    r.valveClassConnection, // [17] pressure class
+    r.ratedTravel, // [18]
+    "", // [19] seat material
+    r.seatLeakClass, // [20]
+    r.valveTrimCharPort, // [21] port size
+    "", // [22] body material
+    r.valveTrimCharPort, // [23] trim style
+    "", // [24] plug material
+    "", // [25] stem material
+    "", // [26] stem diameter
+    "", // [27] cage material
+    r.valvePackingConfiguration, // [28]
+    r.process, // [29] process fluid
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [30-40] capacity, set pressure, inlet/outlet, orifice
+    r.valveFlowDirection, // [41]
 
     // ── 42-62  Actuator (status + 20 fields) ─────────────────────────────────
-    "No",                         // [42] Actuator status  ← unquoted
-    r.actuatorMake,               // [43]
-    r.actuatorModelSize,          // [44]
-    r.actuatorModelSize,          // [45] size
-    r.actuatorSerialNumber,       // [46]
-    "",                           // [47] vendor asset id
-    benchLow,                     // [48] lower bench set
-    benchHigh,                    // [49] upper bench set
-    supplyPressure,               // [50] nominal supply pressure
-    "",                           // [51] stroke time
-    failAction,                   // [52] fail action
-    "","","","","","","","","",   // [53-61] voltage, phase, torque, order, speed, power, temp, current, duty
-    r.actuatorAirAction,          // [62]
+    "No", // [42] Actuator status  ← unquoted
+    r.actuatorMake, // [43]
+    r.actuatorModelSize, // [44]
+    r.actuatorModelSize, // [45] size
+    r.actuatorSerialNumber, // [46]
+    "", // [47] vendor asset id
+    benchLow, // [48] lower bench set
+    benchHigh, // [49] upper bench set
+    supplyPressure, // [50] nominal supply pressure
+    "", // [51] stroke time
+    failAction, // [52] fail action
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [53-61] voltage, phase, torque, order, speed, power, temp, current, duty
+    r.actuatorAirAction, // [62]
 
     // ── 63-77  Accessory (status + 14 fields) ────────────────────────────────
-    "No",                         // [63] Accessory status  ← unquoted
-    "","","","","","","","","","","","","","", // [64-77]
+    "No", // [63] Accessory status  ← unquoted
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [64-77]
 
     // ── 78-102  Device 1 / Positioner (status + 24 fields) ───────────────────
-    "No",                                                    // [78] Device 1 status  ← unquoted
-    r.positionerMake ? "Positioner" : "",                    // [79] Type
-    "",                                                      // [80] Type (Other)
-    r.positionerMake,                                        // [81] Manufacturer
-    r.positionerModelAction,                                 // [82] Model number
-    "",                                                      // [83] Model number (other)
-    r.positionerSerialNumber,                                // [84] Serial number
-    "",                                                      // [85] Vendor asset Id
-    "",                                                      // [86] Diagnostic tier
-    supplyPressure,                                          // [87] Supply pressure setpoint
-    "",                                                      // [88] Bleed rate
-    "",                                                      // [89] Relay type
-    "",                                                      // [90] Bleed type
-    "",                                                      // [91] Supply fluid
-    "",                                                      // [92] Other supply fluid
-    "",                                                      // [93] Output pressure
-    r.positionerModelAction,                                 // [94] Instrument action
-    "","","","","","","","",                                 // [95-102]
+    "No", // [78] Device 1 status  ← unquoted
+    r.positionerMake ? "Positioner" : "", // [79] Type
+    "", // [80] Type (Other)
+    r.positionerMake, // [81] Manufacturer
+    r.positionerModelAction, // [82] Model number
+    "", // [83] Model number (other)
+    r.positionerSerialNumber, // [84] Serial number
+    "", // [85] Vendor asset Id
+    "", // [86] Diagnostic tier
+    supplyPressure, // [87] Supply pressure setpoint
+    "", // [88] Bleed rate
+    "", // [89] Relay type
+    "", // [90] Bleed type
+    "", // [91] Supply fluid
+    "", // [92] Other supply fluid
+    "", // [93] Output pressure
+    r.positionerModelAction, // [94] Instrument action
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [95-102]
 
     // ── 103-127  Device 2 (status + 24 empty) ────────────────────────────────
-    "No",                         // [103] Device 2 status  ← unquoted
-    "","","","","","","","","","","","","","","","","","","","","","","","",  // [104-127]
+    "No", // [103] Device 2 status  ← unquoted
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [104-127]
 
     // ── 128-152  Device 3 (status + 24 empty) ────────────────────────────────
-    "No",                         // [128] Device 3 status  ← unquoted
-    "","","","","","","","","","","","","","","","","","","","","","","","",  // [129-152]
+    "No", // [128] Device 3 status  ← unquoted
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "", // [129-152]
   ];
 }
 
@@ -163,14 +355,16 @@ function buildCsv(reports: RepairReport[]): string {
 
   const dataLines = reports.map((r) => {
     const cells = reportToRow(r);
-    return cells.map((value, colIdx) => {
-      const s = String(value ?? "");
-      if (s === "") return "";
-      // Status columns are unquoted plain values (No / Yes)
-      if (STATUS_COLS.has(colIdx)) return s;
-      // All other text: wrap in quotes with tab prefix, escape inner quotes
-      return `"\t${s.replace(/"/g, '""')}"`;
-    }).join(",");
+    return cells
+      .map((value, colIdx) => {
+        const s = String(value ?? "");
+        if (s === "") return "";
+        // Status columns are unquoted plain values (No / Yes)
+        if (STATUS_COLS.has(colIdx)) return s;
+        // All other text: wrap in quotes with tab prefix, escape inner quotes
+        return `"\t${s.replace(/"/g, '""')}"`;
+      })
+      .join(",");
   });
 
   return [headerLine, ...dataLines].join("\r\n");
@@ -245,8 +439,10 @@ function parsedToReport(p: ParsedPdfReport): RepairReport {
     supplyPressureAsFound: "",
     supplyPressureAsLeft: p.supplyPressureAsLeft,
     failActionAsFound: "",
-    failActionAsLeft: (p.failActionAsLeft as RepairReport["failActionAsLeft"]) || "",
-    actuatorAirAction: (p.actuatorAirAction as RepairReport["actuatorAirAction"]) || "",
+    failActionAsLeft:
+      (p.failActionAsLeft as RepairReport["failActionAsLeft"]) || "",
+    actuatorAirAction:
+      (p.actuatorAirAction as RepairReport["actuatorAirAction"]) || "",
     calibrationTechnician: p.technician,
     testWitness: "",
     testTechnician: "",

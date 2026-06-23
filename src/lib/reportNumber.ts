@@ -1,10 +1,10 @@
 import db from "./db";
-import { RepairReport } from "./types";
+import type { RepairReport } from "./types";
 
 export async function generateReportNumber(): Promise<string> {
   const now = new Date();
   const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
-    now.getDate()
+    now.getDate(),
   ).padStart(2, "0")}`;
   const countToday = await db.reports
     .filter((r) => r.reportNumber.startsWith(`RR-${datePart}-`))
@@ -91,6 +91,8 @@ export function emptyReport(id: string, reportNumber: string) {
   };
 }
 
-export function normalizeReport(raw: Partial<RepairReport> & { id: string }): RepairReport {
+export function normalizeReport(
+  raw: Partial<RepairReport> & { id: string },
+): RepairReport {
   return { ...emptyReport(raw.id, raw.reportNumber ?? ""), ...raw };
 }

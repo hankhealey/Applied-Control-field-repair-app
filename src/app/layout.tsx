@@ -4,16 +4,26 @@ import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
   title: "Applied Control",
   description: "Field service apps — Applied Control",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
       <head>
         {/* Set theme before first paint to prevent flash */}
         <script
@@ -24,9 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="flex h-full" style={{ background: "var(--bg-main)" }}>
         <Sidebar />
-        <div className="flex flex-1 flex-col overflow-y-auto">
-          {children}
-        </div>
+        <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
       </body>
     </html>
   );

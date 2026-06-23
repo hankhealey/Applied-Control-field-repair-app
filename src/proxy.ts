@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { computeSessionToken, SESSION_COOKIE } from "@/lib/auth";
 
 const PUBLIC = ["/login", "/privacy", "/api/auth"];

@@ -1,5 +1,5 @@
 import db from "./db";
-import { RepairFinding, RepairReport, Site } from "./types";
+import type { RepairFinding, RepairReport, Site } from "./types";
 
 let seeded = false;
 
@@ -50,7 +50,8 @@ const report: RepairReport = {
   scopeOfWork: "Open and inspect.",
   recommendations: "",
   futureRecommendations: "Customer specified.",
-  notes: "Valve was rebuilt with preordered parts. Torque wrench MTE-011 B-7 bolting.",
+  notes:
+    "Valve was rebuilt with preordered parts. Torque wrench MTE-011 B-7 bolting.",
   repairScopeCompleted: true,
 
   valveMake: "FISHER",

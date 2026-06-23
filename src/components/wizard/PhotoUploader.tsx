@@ -2,9 +2,13 @@
 
 import { useRef } from "react";
 import db from "@/lib/db";
-import { PhotoCategory, RepairPhoto } from "@/lib/types";
+import type { PhotoCategory, RepairPhoto } from "@/lib/types";
 
-function resizeImage(file: File, maxEdge = 1600, quality = 0.8): Promise<string> {
+function resizeImage(
+  file: File,
+  maxEdge = 1600,
+  quality = 0.8,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -72,7 +76,7 @@ export default function PhotoUploader({
   return (
     <div className="mb-5">
       <p className="mb-2 text-sm font-semibold text-zinc-700">{category}</p>
-      <button
+      <button type="button"
         onClick={() => inputRef.current?.click()}
         className="mb-2 flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-3 text-sm font-semibold text-white"
       >
@@ -107,7 +111,7 @@ export default function PhotoUploader({
                 defaultValue={p.caption}
                 onBlur={(e) => handleCaption(p.id, e.target.value)}
               />
-              <button
+              <button type="button"
                 onClick={() => handleDelete(p.id)}
                 className="w-full text-xs text-red-600"
               >

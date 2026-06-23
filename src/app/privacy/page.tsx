@@ -1,5 +1,5 @@
-import Link from "next/link";
 import Image from "next/image";
+import Link from "next/link";
 
 export default function PrivacyPage() {
   return (
@@ -22,20 +22,27 @@ export default function PrivacyPage() {
         </div>
 
         <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
-          <h1 className="mb-2 text-2xl font-bold text-zinc-900">Privacy Policy</h1>
+          <h1 className="mb-2 text-2xl font-bold text-zinc-900">
+            Privacy Policy
+          </h1>
           <p className="mb-8 text-sm text-zinc-400">Last updated: June 2025</p>
 
           <Section title="Overview">
-            Applied Control Field Repair Reports (&ldquo;the App&rdquo;) is an internal tool used
-            by Applied Control technicians to create, manage, and export equipment
-            repair reports. This policy explains what data the App handles and how it is
-            protected.
+            Applied Control Field Repair Reports (&ldquo;the App&rdquo;) is an
+            internal tool used by Applied Control technicians to create, manage,
+            and export equipment repair reports. This policy explains what data
+            the App handles and how it is protected.
           </Section>
 
           <Section title="Data We Collect">
-            <p className="mb-2">The App collects only the data you enter directly:</p>
+            <p className="mb-2">
+              The App collects only the data you enter directly:
+            </p>
             <ul className="ml-4 list-disc space-y-1 text-sm text-zinc-600">
-              <li>Repair report details (equipment tag, site, technician name, calibration readings, findings)</li>
+              <li>
+                Repair report details (equipment tag, site, technician name,
+                calibration readings, findings)
+              </li>
               <li>Voice recordings when using the Voice Mode feature</li>
               <li>Photos attached to repair reports</li>
             </ul>
@@ -43,73 +50,83 @@ export default function PrivacyPage() {
 
           <Section title="How Data Is Stored">
             <p className="mb-2">
-              <strong>All report data is stored locally on your device</strong> using your
-              browser&rsquo;s built-in IndexedDB storage. No report data is sent to Applied
-              Control servers or any cloud database. Data does not leave your device
-              except as described below.
+              <strong>All report data is stored locally on your device</strong>{" "}
+              using your browser&rsquo;s built-in IndexedDB storage. No report
+              data is sent to Applied Control servers or any cloud database.
+              Data does not leave your device except as described below.
             </p>
             <p>
-              Exported CSV files are downloaded directly to your device and are your
-              responsibility to handle in accordance with your organisation&rsquo;s data policies.
+              Exported CSV files are downloaded directly to your device and are
+              your responsibility to handle in accordance with your
+              organisation&rsquo;s data policies.
             </p>
           </Section>
 
           <Section title="Voice Mode & Third-Party Transcription">
             <p className="mb-2">
               When you use Voice Mode, short audio recordings of your speech are
-              transmitted to <strong>Groq, Inc.</strong> for transcription using their
-              Whisper AI service. Audio is sent over an encrypted HTTPS connection and
-              is not stored by Applied Control.
+              transmitted to <strong>Groq, Inc.</strong> for transcription using
+              their Whisper AI service. Audio is sent over an encrypted HTTPS
+              connection and is not stored by Applied Control.
             </p>
             <p>
-              Groq&rsquo;s handling of audio data is governed by their own privacy policy.
-              Do not speak sensitive personal information (e.g. patient data, passwords)
-              while using Voice Mode.
+              Groq&rsquo;s handling of audio data is governed by their own
+              privacy policy. Do not speak sensitive personal information (e.g.
+              patient data, passwords) while using Voice Mode.
             </p>
           </Section>
 
           <Section title="Authentication">
             <p>
-              The App uses a single session cookie (<code className="rounded bg-zinc-100 px-1 text-xs">__rr_session</code>) to verify
-              that you have entered the correct team password. This cookie is encrypted,
-              stored only in your browser, and expires after 30 days. No personal
-              identity data is collected during login.
+              The App uses a single session cookie (
+              <code className="rounded bg-zinc-100 px-1 text-xs">
+                __rr_session
+              </code>
+              ) to verify that you have entered the correct team password. This
+              cookie is encrypted, stored only in your browser, and expires
+              after 30 days. No personal identity data is collected during
+              login.
             </p>
           </Section>
 
           <Section title="Analytics & Tracking">
             <p>
-              The App does <strong>not</strong> use any analytics, advertising trackers,
-              third-party cookies, or telemetry. We do not track how you use the App,
-              what reports you create, or when you log in.
+              The App does <strong>not</strong> use any analytics, advertising
+              trackers, third-party cookies, or telemetry. We do not track how
+              you use the App, what reports you create, or when you log in.
             </p>
           </Section>
 
           <Section title="Data Retention">
             <p>
-              Because data is stored on your device, you control retention entirely.
-              You can delete individual reports from the home screen, or clear all App
-              data at any time through your browser&rsquo;s storage settings
-              (Settings → Site Data → Clear).
+              Because data is stored on your device, you control retention
+              entirely. You can delete individual reports from the home screen,
+              or clear all App data at any time through your browser&rsquo;s
+              storage settings (Settings → Site Data → Clear).
             </p>
           </Section>
 
           <Section title="Security">
             <p>
-              The App is served exclusively over HTTPS. Access requires a team password.
-              Session tokens are cryptographically signed and stored in httpOnly cookies
-              to prevent JavaScript access. Security headers including
-              Content-Security-Policy and X-Frame-Options are applied to all responses.
+              The App is served exclusively over HTTPS. Access requires a team
+              password. Session tokens are cryptographically signed and stored
+              in httpOnly cookies to prevent JavaScript access. Security headers
+              including Content-Security-Policy and X-Frame-Options are applied
+              to all responses.
             </p>
           </Section>
 
           <Section title="Contact">
             <p>
-              For questions about this policy or data handled by the App, contact
-              Applied Control at{" "}
-              <a href="mailto:info@appliedcontrol.com" className="text-[#154A8A] underline">
+              For questions about this policy or data handled by the App,
+              contact Applied Control at{" "}
+              <a
+                href="mailto:info@appliedcontrol.com"
+                className="text-[#154A8A] underline"
+              >
                 info@appliedcontrol.com
-              </a>.
+              </a>
+              .
             </p>
           </Section>
 
@@ -131,7 +148,13 @@ export default function PrivacyPage() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="mb-6">
       <h2 className="mb-2 text-base font-semibold text-zinc-800">{title}</h2>

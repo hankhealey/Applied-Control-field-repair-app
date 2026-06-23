@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 function LoginForm() {
   const router = useRouter();
@@ -46,10 +46,11 @@ function LoginForm() {
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div>
-          <label className="mb-1 block text-sm font-medium text-zinc-700">
+          <label htmlFor="password" className="mb-1 block text-sm font-medium text-zinc-700">
             Password
           </label>
           <input
+            id="password"
             type="password"
             autoComplete="current-password"
             value={password}
@@ -57,6 +58,7 @@ function LoginForm() {
             className="input w-full"
             placeholder="••••••••"
             required
+            // biome-ignore lint/a11y/noAutofocus: login page intentionally focuses password field
             autoFocus
           />
         </div>

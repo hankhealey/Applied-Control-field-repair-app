@@ -1,10 +1,10 @@
 import db from "../db";
 import {
-  FindingCategory,
+  type FindingCategory,
   PHOTO_CATEGORIES,
-  RepairFinding,
-  RepairPhoto,
-  RepairReport,
+  type RepairFinding,
+  type RepairPhoto,
+  type RepairReport,
 } from "../types";
 
 const CATEGORY_ORDER: FindingCategory[] = [
@@ -21,7 +21,8 @@ function esc(v: unknown): string {
 }
 
 function headerBand(r: RepairReport) {
-  const completedAt = r.status === "Complete" ? esc(r.updatedAt.slice(0, 10)) : "-";
+  const completedAt =
+    r.status === "Complete" ? esc(r.updatedAt.slice(0, 10)) : "-";
   const completedBy = r.status === "Complete" ? esc(r.technician) : "-";
   return `
     <div class="title-row">
@@ -64,7 +65,10 @@ function footerBand(page: number, totalPages: number) {
 type ConstructionField = { label: string; value: string };
 type ConstructionGroup = { group: string; fields: ConstructionField[] };
 
-function constructionGroups(r: RepairReport, phase: "asFound" | "asLeft"): ConstructionGroup[] {
+function constructionGroups(
+  r: RepairReport,
+  phase: "asFound" | "asLeft",
+): ConstructionGroup[] {
   // Construction fields are only recorded once; if nothing changed during the
   // repair the As Left block mirrors As Found, otherwise there's no separate
   // As Left construction data captured.
@@ -102,7 +106,11 @@ function constructionGroups(r: RepairReport, phase: "asFound" | "asLeft"): Const
   ];
 }
 
-function constructionBlock(title: string, groups: ConstructionGroup[], tone: "amber" | "emerald") {
+function constructionBlock(
+  title: string,
+  groups: ConstructionGroup[],
+  tone: "amber" | "emerald",
+) {
   return `
     <div class="construction construction-${tone}">
       <div class="construction-title">${esc(title)}</div>
@@ -118,11 +126,11 @@ function constructionBlock(title: string, groups: ConstructionGroup[], tone: "am
               <div class="constr-row">
                 <div class="constr-label">${esc(f.label)}</div>
                 <div class="constr-value">${esc(f.value)}</div>
-              </div>`
+              </div>`,
               )
               .join("")}
           </div>
-        </div>`
+        </div>`,
         )
         .join("")}
     </div>
@@ -268,10 +276,10 @@ function findingsPage(r: RepairReport, findings: RepairFinding[]) {
           <div class="find-col">${esc(f.conditionFound)}</div>
           <div class="find-col">${esc(f.recommendedAction)}</div>
           <div class="find-col find-col-comments">${esc(f.comments || f.asLeftAction)}</div>
-        </div>`
+        </div>`,
         )
         .join("")}
-    `
+    `,
     )
     .join("");
 
@@ -314,7 +322,7 @@ function photoPages(r: RepairReport, photos: RepairPhoto[]) {
               <div class="photo-cell">
                 <img src="${p.photo}" onerror="this.outerHTML='<div class=\\'broken\\'>Image unavailable</div>'" />
                 <div class="caption">${esc(p.caption)}</div>
-              </div>`
+              </div>`,
               )
               .join("")}
           </div>
@@ -457,15 +465,14 @@ const PAGE_WIDTH_IN = 8.5;
 async function waitForImages(container: HTMLElement) {
   const imgs = Array.from(container.querySelectorAll("img"));
   await Promise.all(
-    imgs.map(
-      (img) =>
-        img.complete
-          ? Promise.resolve()
-          : new Promise<void>((resolve) => {
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
-            })
-    )
+    imgs.map((img) =>
+      img.complete
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+          }),
+    ),
   );
 }
 
@@ -524,8 +531,14 @@ function downloadBlob(blob: Blob, filename: string) {
 async function buildReportSections(reportId: string, blankAsLeft: boolean) {
   const report = await db.reports.get(reportId);
   if (!report) throw new Error("Report not found");
-  const findings = await db.findings.where("repairReportId").equals(reportId).toArray();
-  let photos = await db.photos.where("repairReportId").equals(reportId).toArray();
+  const findings = await db.findings
+    .where("repairReportId")
+    .equals(reportId)
+    .toArray();
+  let photos = await db.photos
+    .where("repairReportId")
+    .equals(reportId)
+    .toArray();
 
   let r = report;
   let f = findings;
@@ -550,7 +563,7 @@ async function buildReportSections(reportId: string, blankAsLeft: boolean) {
         p.photoCategory === "As Found Assembly" ||
         p.photoCategory === "As Found Trim" ||
         p.photoCategory === "Nameplate / Tag" ||
-        p.photoCategory === "Damage Detail"
+        p.photoCategory === "Damage Detail",
     );
   }
 

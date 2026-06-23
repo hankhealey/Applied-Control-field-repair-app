@@ -1,9 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   const key = process.env.GROQ_API_KEY;
   if (!key) {
-    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 });
+    return NextResponse.json(
+      { error: "GROQ_API_KEY not configured" },
+      { status: 500 },
+    );
   }
 
   const body = await req.formData();
@@ -18,11 +21,14 @@ export async function POST(req: NextRequest) {
   form.append("language", "en");
   form.append("response_format", "json");
 
-  const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}` },
-    body: form,
-  });
+  const res = await fetch(
+    "https://api.groq.com/openai/v1/audio/transcriptions",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
+    },
+  );
 
   if (!res.ok) {
     const err = await res.text();

@@ -4,8 +4,8 @@ import { useState } from "react";
 import db from "@/lib/db";
 import {
   FINDING_COMPONENTS,
-  FindingCategory,
-  RepairFinding,
+  type FindingCategory,
+  type RepairFinding,
 } from "@/lib/types";
 
 const CATEGORIES = Object.keys(FINDING_COMPONENTS) as FindingCategory[];
@@ -78,7 +78,7 @@ export default function FindingsEditor({
             </option>
           ))}
         </select>
-        <button
+        <button type="button"
           onClick={addFinding}
           className="rounded-lg bg-[#154A8A] px-4 py-2 text-sm font-semibold text-white"
         >
@@ -96,7 +96,7 @@ export default function FindingsEditor({
               <span className="text-sm font-semibold text-zinc-800">
                 {f.componentCategory} — {f.componentName}
               </span>
-              <button
+              <button type="button"
                 onClick={() => removeFinding(f.id)}
                 className="text-xs text-red-600"
               >
@@ -133,7 +133,7 @@ export default function FindingsEditor({
                       updateFinding(f.id, { asLeftAction: e.target.value })
                     }
                   />
-                  <button
+                  <button type="button"
                     onClick={() => applyNoChange(f)}
                     className="whitespace-nowrap rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700"
                   >

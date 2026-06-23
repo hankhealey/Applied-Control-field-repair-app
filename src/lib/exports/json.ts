@@ -1,12 +1,18 @@
 import db from "../db";
-import { RepairReport } from "../types";
+import type { RepairReport } from "../types";
 
 async function buildPayload(reportId: string, blankAsLeft: boolean) {
   const report = await db.reports.get(reportId);
   if (!report) throw new Error("Report not found");
   const site = report.siteId ? await db.sites.get(report.siteId) : null;
-  const findings = await db.findings.where("repairReportId").equals(reportId).toArray();
-  let photos = await db.photos.where("repairReportId").equals(reportId).toArray();
+  const findings = await db.findings
+    .where("repairReportId")
+    .equals(reportId)
+    .toArray();
+  let photos = await db.photos
+    .where("repairReportId")
+    .equals(reportId)
+    .toArray();
 
   let reportOut: RepairReport = report;
   if (blankAsLeft) {
@@ -25,8 +31,11 @@ async function buildPayload(reportId: string, blankAsLeft: boolean) {
       gasTestResult: "",
     };
     photos = photos.filter(
-      (p) => p.photoCategory === "As Found Assembly" || p.photoCategory === "As Found Trim" ||
-        p.photoCategory === "Nameplate / Tag" || p.photoCategory === "Damage Detail"
+      (p) =>
+        p.photoCategory === "As Found Assembly" ||
+        p.photoCategory === "As Found Trim" ||
+        p.photoCategory === "Nameplate / Tag" ||
+        p.photoCategory === "Damage Detail",
     );
   }
 
@@ -44,7 +53,9 @@ async function buildPayload(reportId: string, blankAsLeft: boolean) {
 }
 
 function download(filename: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -66,6 +77,8 @@ export async function exportAsFoundJson(reportId: string) {
 }
 
 export async function exportRepairJsonMulti(reportIds: string[]) {
-  const payloads = await Promise.all(reportIds.map((id) => buildPayload(id, false)));
+  const payloads = await Promise.all(
+    reportIds.map((id) => buildPayload(id, false)),
+  );
   download(`repair-reports-${Date.now()}.json`, payloads);
 }

@@ -4,7 +4,7 @@ export const SESSION_COOKIE = "__rr_session";
  *  Works in both Edge (middleware) and Node.js (API routes) runtimes. */
 export async function computeSessionToken(
   password: string,
-  secret: string
+  secret: string,
 ): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -12,7 +12,7 @@ export async function computeSessionToken(
     enc.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(password));
   return Array.from(new Uint8Array(sig))

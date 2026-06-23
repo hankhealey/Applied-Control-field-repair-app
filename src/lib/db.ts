@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
-import { Site, RepairReport, RepairFinding, RepairPhoto } from "./types";
+import type { RepairFinding, RepairPhoto, RepairReport, Site } from "./types";
 
 const db = new Dexie("appliedControlDB") as Dexie & {
   sites: EntityTable<Site, "id">;

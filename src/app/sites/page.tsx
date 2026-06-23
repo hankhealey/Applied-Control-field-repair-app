@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 import Header from "@/components/Header";
 import db from "@/lib/db";
-import { Site } from "@/lib/types";
+import type { Site } from "@/lib/types";
 
 const emptySite = (): Site => ({
   id: crypto.randomUUID(),
@@ -22,11 +22,11 @@ export default function SitesPage() {
   const [editing, setEditing] = useState<Site | null>(null);
 
   const filtered = (sites ?? []).filter((s) =>
-    s.title.toLowerCase().includes(search.toLowerCase())
+    s.title.toLowerCase().includes(search.toLowerCase()),
   );
 
   async function handleSave() {
-    if (!editing || !editing.title.trim()) return;
+    if (!editing?.title.trim()) return;
     await db.sites.put(editing);
     setEditing(null);
   }
@@ -41,7 +41,7 @@ export default function SitesPage() {
     <div className="min-h-screen bg-zinc-50">
       <Header />
       <main className="mx-auto max-w-3xl px-6 py-6">
-        <button
+        <button type="button"
           onClick={() => router.push("/")}
           className="mb-4 text-sm font-medium text-[#154A8A]"
         >
@@ -55,7 +55,7 @@ export default function SitesPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button
+          <button type="button"
             onClick={() => setEditing(emptySite())}
             className="whitespace-nowrap rounded-lg bg-[#154A8A] px-4 py-2 text-sm font-semibold text-white"
           >
@@ -66,7 +66,9 @@ export default function SitesPage() {
         {editing && (
           <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 font-semibold text-zinc-900">
-              {sites?.find((s) => s.id === editing.id) ? "Edit Site" : "New Site"}
+              {sites?.find((s) => s.id === editing.id)
+                ? "Edit Site"
+                : "New Site"}
             </h2>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="block">
@@ -120,13 +122,13 @@ export default function SitesPage() {
               </label>
             </div>
             <div className="mt-4 flex justify-end gap-3">
-              <button
+              <button type="button"
                 onClick={() => setEditing(null)}
                 className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700"
               >
                 Cancel
               </button>
-              <button
+              <button type="button"
                 onClick={handleSave}
                 className="rounded-lg bg-[#154A8A] px-4 py-2 text-sm font-semibold text-white"
               >
@@ -149,14 +151,14 @@ export default function SitesPage() {
                 </p>
               </div>
               <div className="flex gap-2">
-                <button
+                <button type="button"
                   onClick={() => setEditing(site)}
                   className="px-2 text-zinc-500 hover:text-[#154A8A]"
                   aria-label="Edit site"
                 >
                   ✎
                 </button>
-                <button
+                <button type="button"
                   onClick={() => handleDelete(site.id)}
                   className="px-2 text-zinc-400 hover:text-red-600"
                   aria-label="Delete site"

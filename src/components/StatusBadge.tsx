@@ -1,4 +1,4 @@
-import { ReportStatus } from "@/lib/types";
+import type { ReportStatus } from "@/lib/types";
 
 const STYLES: Record<ReportStatus, string> = {
   Draft: "bg-zinc-100 text-zinc-700",

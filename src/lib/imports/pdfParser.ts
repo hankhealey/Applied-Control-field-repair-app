@@ -75,32 +75,63 @@ function dedup(value: string): string {
 
 // Words that belong in a findings/actions table, NOT in equipment fields
 const REPAIR_WORDS = new Set([
-  "polish", "reuse", "replace", "clean", "inspect", "rework", "repair",
-  "discard", "lubricate", "lap", "hone", "adjust", "retainer", "retorque",
-  "lapping", "grinding", "cleaning", "polishing", "lube",
+  "polish",
+  "reuse",
+  "replace",
+  "clean",
+  "inspect",
+  "rework",
+  "repair",
+  "discard",
+  "lubricate",
+  "lap",
+  "hone",
+  "adjust",
+  "retainer",
+  "retorque",
+  "lapping",
+  "grinding",
+  "cleaning",
+  "polishing",
+  "lube",
 ]);
 
 // Labels that mark the START of the findings / action table
 const FINDINGS_HEADERS = [
-  "FINDINGS", "Repair Findings", "REPAIR FINDINGS",
-  "Condition Found", "Recommended Action", "As Left Action",
-  "Component Category", "conditionFound",
+  "FINDINGS",
+  "Repair Findings",
+  "REPAIR FINDINGS",
+  "Condition Found",
+  "Recommended Action",
+  "As Left Action",
+  "Component Category",
+  "conditionFound",
 ];
 
 // Equipment fields — must not contain repair action words
 type EquipKey = keyof ParsedPdfReport;
 const EQUIPMENT_FIELDS = new Set<EquipKey>([
-  "valveMake", "valveSerialNumber", "valveModelSize", "valveClassConnection",
-  "valvePackingConfiguration", "valveTrimCharPort", "valveFlowDirection",
-  "actuatorMake", "actuatorSerialNumber", "actuatorModelSize", "actuatorActionHandwheel",
-  "positionerMake", "positionerSerialNumber", "positionerModelAction",
+  "valveMake",
+  "valveSerialNumber",
+  "valveModelSize",
+  "valveClassConnection",
+  "valvePackingConfiguration",
+  "valveTrimCharPort",
+  "valveFlowDirection",
+  "actuatorMake",
+  "actuatorSerialNumber",
+  "actuatorModelSize",
+  "actuatorActionHandwheel",
+  "positionerMake",
+  "positionerSerialNumber",
+  "positionerModelAction",
 ]);
 
 // ── Text extraction ───────────────────────────────────────────────────────────
 
 interface PageItems {
-  page1: TItem[];       // page 1 only — most reliable for header + construction
-  all: TItem[];         // all pages combined
+  page1: TItem[]; // page 1 only — most reliable for header + construction
+  all: TItem[]; // all pages combined
   pageWidth: number;
   findingsStartY: number; // y where findings table begins (Infinity if not found)
 }
@@ -122,7 +153,11 @@ export async function extractTextItems(file: File): Promise<PageItems> {
     if (p === 1) pageWidth = vp.width;
 
     const content = await page.getTextContent();
-    for (const raw of content.items as Array<{ str: string; transform: number[]; width: number }>) {
+    for (const raw of content.items as Array<{
+      str: string;
+      transform: number[];
+      width: number;
+    }>) {
       const s = raw.str.trim();
       if (!s) continue;
       const item: TItem = {
@@ -153,12 +188,18 @@ export async function extractTextItems(file: File): Promise<PageItems> {
 // ── Core lookup helpers ───────────────────────────────────────────────────────
 
 /** Items to the right of `origin` on the same row */
-function rightOf(items: TItem[], origin: TItem, rowTol = 5, maxGap = 25): TItem[] {
+function rightOf(
+  items: TItem[],
+  origin: TItem,
+  rowTol = 5,
+  maxGap = 25,
+): TItem[] {
   return items
-    .filter((i) =>
-      Math.abs(i.y - origin.y) <= rowTol &&
-      i.x > origin.x + origin.w - 4 &&
-      norm(i.str) !== norm(origin.str)
+    .filter(
+      (i) =>
+        Math.abs(i.y - origin.y) <= rowTol &&
+        i.x > origin.x + origin.w - 4 &&
+        norm(i.str) !== norm(origin.str),
     )
     .sort((a, b) => a.x - b.x);
 }
@@ -194,7 +235,9 @@ function findValue(
 ): string {
   for (const label of labels) {
     const lnorm = norm(label);
-    let matches = items.filter((i) => norm(i.str) === lnorm || i.str.includes(label));
+    let matches = items.filter(
+      (i) => norm(i.str) === lnorm || i.str.includes(label),
+    );
 
     if (!matches.length) continue;
 
@@ -231,7 +274,10 @@ function findCalAL(items: TItem[], colIdx: number): string {
   let bestCount = -1;
   for (const row of rows) {
     const cnt = rightOf(items, row, 8).length;
-    if (cnt > bestCount) { best = row; bestCount = cnt; }
+    if (cnt > bestCount) {
+      best = row;
+      bestCount = cnt;
+    }
   }
   if (!best) return "";
 
@@ -297,94 +343,205 @@ function extractFields(
   const safe = scope.filter((i) => i.y < findingsY);
 
   // ── Header / job info — use all scope items ───────────────────────────────
-  const tagOrUnit = findValue(scope, [
-    "Tag / Unit", "Tag No.", "Tag No", "Tag Number", "Tag:", "Tag", "Unit No.",
-  ], strategy);
+  const tagOrUnit = findValue(
+    scope,
+    [
+      "Tag / Unit",
+      "Tag No.",
+      "Tag No",
+      "Tag Number",
+      "Tag:",
+      "Tag",
+      "Unit No.",
+    ],
+    strategy,
+  );
 
-  const customer = findValue(scope, [
-    "Customer", "Customer:", "Client", "Client:", "CUSTOMER",
-  ], strategy);
+  const customer = findValue(
+    scope,
+    ["Customer", "Customer:", "Client", "Client:", "CUSTOMER"],
+    strategy,
+  );
 
-  const siteTitle = findValue(scope, [
-    "Site", "Site:", "Location", "Plant", "Facility",
-  ], strategy);
+  const siteTitle = findValue(
+    scope,
+    ["Site", "Site:", "Location", "Plant", "Facility"],
+    strategy,
+  );
 
-  const repairDate = findValue(scope, [
-    "Repair Date", "Date", "Date:", "Completed At", "Service Date",
-  ], strategy);
+  const repairDate = findValue(
+    scope,
+    ["Repair Date", "Date", "Date:", "Completed At", "Service Date"],
+    strategy,
+  );
 
-  const technician = findValue(scope, [
-    "Technician", "Tech", "Tech:", "Completed By", "Service Tech",
-  ], strategy);
+  const technician = findValue(
+    scope,
+    ["Technician", "Tech", "Tech:", "Completed By", "Service Tech"],
+    strategy,
+  );
 
-  const process = findValue(scope, [
-    "Process", "Process Fluid", "Process:", "Application", "Service",
-  ], strategy);
+  const process = findValue(
+    scope,
+    ["Process", "Process Fluid", "Process:", "Application", "Service"],
+    strategy,
+  );
 
-  const emrReference = findValue(scope, [
-    "EMR Reference", "EMR Ref.", "EMR Ref", "EMR #", "EMR:", "Work Order", "WO #",
-  ], strategy);
+  const emrReference = findValue(
+    scope,
+    [
+      "EMR Reference",
+      "EMR Ref.",
+      "EMR Ref",
+      "EMR #",
+      "EMR:",
+      "Work Order",
+      "WO #",
+    ],
+    strategy,
+  );
 
-  const crmodReference = findValue(scope, [
-    "CRMoD Reference", "CRMod Ref.", "CRMod", "CRMoD Ref", "PO Number", "PO No.", "CRMoD:",
-  ], strategy);
+  const crmodReference = findValue(
+    scope,
+    [
+      "CRMoD Reference",
+      "CRMod Ref.",
+      "CRMod",
+      "CRMoD Ref",
+      "PO Number",
+      "PO No.",
+      "CRMoD:",
+    ],
+    strategy,
+  );
 
-  const scopeOfWork = findValue(scope, [
-    "Scope of Work", "Scope", "Problem Description", "Work Performed", "Description",
-  ], "first", 8); // wider row tolerance for multi-line
+  const scopeOfWork = findValue(
+    scope,
+    [
+      "Scope of Work",
+      "Scope",
+      "Problem Description",
+      "Work Performed",
+      "Description",
+    ],
+    "first",
+    8,
+  ); // wider row tolerance for multi-line
 
   // ── Construction — AS LEFT preferred (rightmost) ──────────────────────────
   // Restrict to `safe` items (above findings section) for construction fields.
 
-  const valveMake = findValue(safe, [
-    "Valve Make", "Valve Manufacturer", "Valve Mfr.", "Valve Mfr",
-    "Body Make", "Body Manufacturer",
-  ], "rightmost")
-    || findValue(safe, ["Make"], "rightmost");
+  const valveMake =
+    findValue(
+      safe,
+      [
+        "Valve Make",
+        "Valve Manufacturer",
+        "Valve Mfr.",
+        "Valve Mfr",
+        "Body Make",
+        "Body Manufacturer",
+      ],
+      "rightmost",
+    ) || findValue(safe, ["Make"], "rightmost");
 
-  const valveSerialNumber = findValue(safe, [
-    "Valve S/N", "Valve Serial No.", "Valve Serial Number", "Valve Serial",
-    "Body S/N", "Body Serial",
-  ], "rightmost")
-    || findValue(safe, ["S/N"], "rightmost");
+  const valveSerialNumber =
+    findValue(
+      safe,
+      [
+        "Valve S/N",
+        "Valve Serial No.",
+        "Valve Serial Number",
+        "Valve Serial",
+        "Body S/N",
+        "Body Serial",
+      ],
+      "rightmost",
+    ) || findValue(safe, ["S/N"], "rightmost");
 
-  const valveModelSize = findValue(safe, [
-    "Valve Model", "Valve Model No.", "Model Number", "Valve Model/Size",
-    "Model / Size", "Model/Size",
-  ], "rightmost")
-    || findValue(safe, ["Model / Size", "Model/Size"], "rightmost");
+  const valveModelSize =
+    findValue(
+      safe,
+      [
+        "Valve Model",
+        "Valve Model No.",
+        "Model Number",
+        "Valve Model/Size",
+        "Model / Size",
+        "Model/Size",
+      ],
+      "rightmost",
+    ) || findValue(safe, ["Model / Size", "Model/Size"], "rightmost");
 
-  const valveClassConnection = findValue(safe, [
-    "Class / Conn.", "Class / Connection", "Pressure Class", "ANSI Class",
-    "Class/Connection", "Class & Rating",
-  ], "rightmost");
+  const valveClassConnection = findValue(
+    safe,
+    [
+      "Class / Conn.",
+      "Class / Connection",
+      "Pressure Class",
+      "ANSI Class",
+      "Class/Connection",
+      "Class & Rating",
+    ],
+    "rightmost",
+  );
 
-  const valvePackingConfiguration = findValue(safe, [
-    "Pkg. Configuration", "Packing Config.", "Packing Type", "Packing Configuration",
-    "Packing", "Pkg Config",
-  ], "rightmost");
+  const valvePackingConfiguration = findValue(
+    safe,
+    [
+      "Pkg. Configuration",
+      "Packing Config.",
+      "Packing Type",
+      "Packing Configuration",
+      "Packing",
+      "Pkg Config",
+    ],
+    "rightmost",
+  );
 
-  const valveTrimCharPort = findValue(safe, [
-    "Trim Char / Port", "Trim / Char / Port", "Trim Style", "Trim Characteristic",
-    "Trim Char/Port", "Trim",
-  ], "rightmost");
+  const valveTrimCharPort = findValue(
+    safe,
+    [
+      "Trim Char / Port",
+      "Trim / Char / Port",
+      "Trim Style",
+      "Trim Characteristic",
+      "Trim Char/Port",
+      "Trim",
+    ],
+    "rightmost",
+  );
 
-  const valveFlowDirection = findValue(safe, [
-    "Flow Direction", "Flow Dir.", "Flow Dir", "Flow",
-  ], "rightmost");
+  const valveFlowDirection = findValue(
+    safe,
+    ["Flow Direction", "Flow Dir.", "Flow Dir", "Flow"],
+    "rightmost",
+  );
 
-  const actuatorMake = findValue(safe, [
-    "Actuator Make", "Actuator Manufacturer", "Actuator Mfr.", "Act. Make",
-  ], "rightmost");
+  const actuatorMake = findValue(
+    safe,
+    ["Actuator Make", "Actuator Manufacturer", "Actuator Mfr.", "Act. Make"],
+    "rightmost",
+  );
 
-  const actuatorSerialNumber = findValue(safe, [
-    "Actuator S/N", "Actuator Serial No.", "Actuator Serial", "Act. S/N",
-  ], "rightmost");
+  const actuatorSerialNumber = findValue(
+    safe,
+    ["Actuator S/N", "Actuator Serial No.", "Actuator Serial", "Act. S/N"],
+    "rightmost",
+  );
 
-  const actuatorModelSize = findValue(safe, [
-    "Actuator Model", "Act. Model", "Actuator Model/Size", "Act. Model / Size",
-  ], "rightmost")
-    || (() => {
+  const actuatorModelSize =
+    findValue(
+      safe,
+      [
+        "Actuator Model",
+        "Act. Model",
+        "Actuator Model/Size",
+        "Act. Model / Size",
+      ],
+      "rightmost",
+    ) ||
+    (() => {
       // If there are 2+ "Model / Size" labels, the second one is actuator
       const hits = safe.filter((i) => norm(i.str) === "Model / Size");
       if (hits.length >= 2) {
@@ -395,28 +552,52 @@ function extractFields(
       return "";
     })();
 
-  const actuatorActionHandwheel = findValue(safe, [
-    "Action / Handwheel", "Actuator Action", "Act. Action", "Action/Handwheel",
-    "Action / H.W.",
-  ], "rightmost");
+  const actuatorActionHandwheel = findValue(
+    safe,
+    [
+      "Action / Handwheel",
+      "Actuator Action",
+      "Act. Action",
+      "Action/Handwheel",
+      "Action / H.W.",
+    ],
+    "rightmost",
+  );
 
-  const positionerMake = findValue(safe, [
-    "Positioner Make", "Positioner Manufacturer", "Positioner Mfr.", "Pos. Make",
-  ], "rightmost");
+  const positionerMake = findValue(
+    safe,
+    [
+      "Positioner Make",
+      "Positioner Manufacturer",
+      "Positioner Mfr.",
+      "Pos. Make",
+    ],
+    "rightmost",
+  );
 
-  const positionerSerialNumber = findValue(safe, [
-    "Positioner S/N", "Positioner Serial No.", "Positioner Serial", "Pos. S/N",
-  ], "rightmost");
+  const positionerSerialNumber = findValue(
+    safe,
+    [
+      "Positioner S/N",
+      "Positioner Serial No.",
+      "Positioner Serial",
+      "Pos. S/N",
+    ],
+    "rightmost",
+  );
 
-  const positionerModelAction = findValue(safe, [
-    "Model / Action", "Pos. Model / Action", "Positioner Model", "Pos. Model",
-  ], "rightmost");
+  const positionerModelAction = findValue(
+    safe,
+    ["Model / Action", "Pos. Model / Action", "Positioner Model", "Pos. Model"],
+    "rightmost",
+  );
 
   // ── Calibration — AS LEFT row ─────────────────────────────────────────────
   // Calibration is on page 1; use `scope` (not `safe`) since calibration
   // appears before the findings table y anyway.
   const ratedTravel =
-    findCalAL(scope, 0) || findValue(scope, ["Rated Travel", "Travel"], "first");
+    findCalAL(scope, 0) ||
+    findValue(scope, ["Rated Travel", "Travel"], "first");
 
   const benchSetAsLeft = findCalAL(scope, 1);
   const openSignalAsLeft = findCalAL(scope, 2);
@@ -428,20 +609,50 @@ function extractFields(
   const actuatorAirAction = findCalAL(scope, 6);
 
   // ── Test data ─────────────────────────────────────────────────────────────
-  const seatLeakClass = findValue(scope, [
-    "Seat Leak Class", "Leak Class", "ANSI Leak Class", "Leakage Class",
-    "Seat Leakage Class",
-  ], "first");
+  const seatLeakClass = findValue(
+    scope,
+    [
+      "Seat Leak Class",
+      "Leak Class",
+      "ANSI Leak Class",
+      "Leakage Class",
+      "Seat Leakage Class",
+    ],
+    "first",
+  );
 
   return {
-    tagOrUnit, customer, siteTitle, repairDate, technician, process,
-    emrReference, crmodReference, scopeOfWork,
-    valveMake, valveSerialNumber, valveModelSize, valveClassConnection,
-    valvePackingConfiguration, valveTrimCharPort, valveFlowDirection,
-    actuatorMake, actuatorSerialNumber, actuatorModelSize, actuatorActionHandwheel,
-    positionerMake, positionerSerialNumber, positionerModelAction,
-    ratedTravel, benchSetAsLeft, openSignalAsLeft, closedSignalAsLeft,
-    supplyPressureAsLeft, failActionAsLeft, actuatorAirAction, seatLeakClass,
+    tagOrUnit,
+    customer,
+    siteTitle,
+    repairDate,
+    technician,
+    process,
+    emrReference,
+    crmodReference,
+    scopeOfWork,
+    valveMake,
+    valveSerialNumber,
+    valveModelSize,
+    valveClassConnection,
+    valvePackingConfiguration,
+    valveTrimCharPort,
+    valveFlowDirection,
+    actuatorMake,
+    actuatorSerialNumber,
+    actuatorModelSize,
+    actuatorActionHandwheel,
+    positionerMake,
+    positionerSerialNumber,
+    positionerModelAction,
+    ratedTravel,
+    benchSetAsLeft,
+    openSignalAsLeft,
+    closedSignalAsLeft,
+    supplyPressureAsLeft,
+    failActionAsLeft,
+    actuatorAirAction,
+    seatLeakClass,
   };
 }
 
@@ -467,15 +678,29 @@ function fixIssues(
       continue;
     }
 
-    if (issue.reason === "repair_action" || issue.reason === "number_only" || issue.reason === "too_long") {
+    if (
+      issue.reason === "repair_action" ||
+      issue.reason === "number_only" ||
+      issue.reason === "too_long"
+    ) {
       // Clear the bad value and try strict single-token on safe items
       (fixed as Record<string, string>)[key] = "";
 
       // Retry with strict strategy on page 1 safe items only
-      const retried = extractFields(safe, allItems, pageWidth, findingsY, "strict");
+      const retried = extractFields(
+        safe,
+        allItems,
+        pageWidth,
+        findingsY,
+        "strict",
+      );
       const retriedVal = String((retried as Record<string, string>)[key] ?? "");
 
-      if (retriedVal && !REPAIR_WORDS.has(retriedVal.toLowerCase()) && !/^\d+\.?$/.test(retriedVal)) {
+      if (
+        retriedVal &&
+        !REPAIR_WORDS.has(retriedVal.toLowerCase()) &&
+        !/^\d+\.?$/.test(retriedVal)
+      ) {
         (fixed as Record<string, string>)[key] = retriedVal;
       }
       // Otherwise leave empty — better than wrong
@@ -488,22 +713,48 @@ function fixIssues(
 // ── Main exported function — 3-pass validation ────────────────────────────────
 
 export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
-  const { page1, all, pageWidth, findingsStartY } = await extractTextItems(file);
+  const { page1, all, pageWidth, findingsStartY } =
+    await extractTextItems(file);
 
   // If no text found at all (image-based PDF)
   if (all.length < 10) {
     return {
       filename: file.name,
-      tagOrUnit: "", customer: "", siteTitle: "", repairDate: "",
-      technician: "", process: "", emrReference: "", crmodReference: "", scopeOfWork: "",
-      valveMake: "", valveSerialNumber: "", valveModelSize: "", valveClassConnection: "",
-      valvePackingConfiguration: "", valveTrimCharPort: "", valveFlowDirection: "",
-      actuatorMake: "", actuatorSerialNumber: "", actuatorModelSize: "", actuatorActionHandwheel: "",
-      positionerMake: "", positionerSerialNumber: "", positionerModelAction: "",
-      ratedTravel: "", benchSetAsLeft: "", openSignalAsLeft: "", closedSignalAsLeft: "",
-      supplyPressureAsLeft: "", failActionAsLeft: "", actuatorAirAction: "", seatLeakClass: "",
+      tagOrUnit: "",
+      customer: "",
+      siteTitle: "",
+      repairDate: "",
+      technician: "",
+      process: "",
+      emrReference: "",
+      crmodReference: "",
+      scopeOfWork: "",
+      valveMake: "",
+      valveSerialNumber: "",
+      valveModelSize: "",
+      valveClassConnection: "",
+      valvePackingConfiguration: "",
+      valveTrimCharPort: "",
+      valveFlowDirection: "",
+      actuatorMake: "",
+      actuatorSerialNumber: "",
+      actuatorModelSize: "",
+      actuatorActionHandwheel: "",
+      positionerMake: "",
+      positionerSerialNumber: "",
+      positionerModelAction: "",
+      ratedTravel: "",
+      benchSetAsLeft: "",
+      openSignalAsLeft: "",
+      closedSignalAsLeft: "",
+      supplyPressureAsLeft: "",
+      failActionAsLeft: "",
+      actuatorAirAction: "",
+      seatLeakClass: "",
       _passCount: 0,
-      _warnings: ["PDF appears to be image-based — text could not be extracted. Enter fields manually."],
+      _warnings: [
+        "PDF appears to be image-based — text could not be extracted. Enter fields manually.",
+      ],
     };
   }
 
@@ -518,17 +769,26 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     return { filename: file.name, ...fields, _passCount: 1, _warnings: [] };
   }
 
-  warnings.push(`Pass 1: ${issues.length} issue(s) detected — ${issues.map((i) => `${i.field}="${i.value}" (${i.reason})`).join("; ")}`);
+  warnings.push(
+    `Pass 1: ${issues.length} issue(s) detected — ${issues.map((i) => `${i.field}="${i.value}" (${i.reason})`).join("; ")}`,
+  );
 
   // ── Pass 2: Fix issues with stricter extraction ──────────────────────────
   fields = fixIssues(fields, issues, scope1, all, pageWidth, findingsStartY);
   issues = validateResult({ filename: file.name, ...fields });
 
   if (issues.length === 0) {
-    return { filename: file.name, ...fields, _passCount: 2, _warnings: warnings };
+    return {
+      filename: file.name,
+      ...fields,
+      _passCount: 2,
+      _warnings: warnings,
+    };
   }
 
-  warnings.push(`Pass 2: ${issues.length} issue(s) remain — retrying with strict single-token strategy`);
+  warnings.push(
+    `Pass 2: ${issues.length} issue(s) remain — retrying with strict single-token strategy`,
+  );
 
   // ── Pass 3: Full strict pass on all items, tightest criteria ────────────
   const strictFields = extractFields(
@@ -540,8 +800,14 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   );
   // Merge: for any field that was fixed in pass 2, keep that; use pass 3 for remainder issues
   for (const issue of issues) {
-    const strictVal = String((strictFields as Record<string, string>)[issue.field] ?? "");
-    if (strictVal && !REPAIR_WORDS.has(strictVal.toLowerCase()) && !/^\d+\.?$/.test(strictVal)) {
+    const strictVal = String(
+      (strictFields as Record<string, string>)[issue.field] ?? "",
+    );
+    if (
+      strictVal &&
+      !REPAIR_WORDS.has(strictVal.toLowerCase()) &&
+      !/^\d+\.?$/.test(strictVal)
+    ) {
       (fields as Record<string, string>)[issue.field] = strictVal;
     } else {
       // Give up — clear the field rather than store wrong data
@@ -551,7 +817,9 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
 
   const remaining = validateResult({ filename: file.name, ...fields });
   if (remaining.length > 0) {
-    warnings.push(`Pass 3 (final): ${remaining.length} field(s) cleared — could not reliably extract: ${remaining.map((i) => i.field).join(", ")}`);
+    warnings.push(
+      `Pass 3 (final): ${remaining.length} field(s) cleared — could not reliably extract: ${remaining.map((i) => i.field).join(", ")}`,
+    );
     for (const issue of remaining) {
       (fields as Record<string, string>)[issue.field] = "";
     }

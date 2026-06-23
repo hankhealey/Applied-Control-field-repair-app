@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { computeSessionToken, SESSION_COOKIE } from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
@@ -8,7 +8,10 @@ export async function POST(req: NextRequest) {
   const authSecret = process.env.AUTH_SECRET;
 
   if (!appPassword || !authSecret) {
-    return NextResponse.json({ error: "Auth not configured on server" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Auth not configured on server" },
+      { status: 500 },
+    );
   }
 
   // Reject empty or wrong password
