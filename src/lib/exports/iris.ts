@@ -411,6 +411,7 @@ function parsedToReport(p: ParsedPdfReport): RepairReport {
     futureRecommendations: "",
     notes: "",
     repairScopeCompleted: false,
+    irisSyncedAt: null,
     valveMake: p.valveMake,
     valveSerialNumber: p.valveSerialNumber,
     valveModelSize: p.valveModelSize,

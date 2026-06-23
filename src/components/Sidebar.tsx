@@ -152,6 +152,54 @@ function SitesIcon({ active }: { active: boolean }) {
   );
 }
 
+function IrisSyncIcon({ active }: { active: boolean }) {
+  const c = active ? "#93C5FD" : "#4B5563";
+  return (
+    <svg width="38" height="38" viewBox="0 0 38 38" fill="none">
+      <rect
+        width="38"
+        height="38"
+        rx="9"
+        fill={active ? "#0C2D50" : "#1A2330"}
+      />
+      {/* Arc 1: upper-right → bottom (clockwise 135°) */}
+      <path
+        d="M25 13 A8 8 0 0 1 19 27"
+        stroke={c}
+        strokeWidth="1.8"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* Arrowhead at bottom, pointing left */}
+      <path
+        d="M19 27 L22 24.5 M19 27 L22 29.5"
+        stroke={c}
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* Arc 2: lower-left → top (clockwise 135°) */}
+      <path
+        d="M13 25 A8 8 0 0 1 19 11"
+        stroke={c}
+        strokeWidth="1.8"
+        fill="none"
+        strokeLinecap="round"
+        opacity="0.7"
+      />
+      {/* Arrowhead at top, pointing right */}
+      <path
+        d="M19 11 L16 8.5 M19 11 L16 13.5"
+        stroke={c}
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+        opacity="0.7"
+      />
+    </svg>
+  );
+}
+
 function PlaceholderIcon() {
   return (
     <svg width="38" height="38" viewBox="0 0 38 38" fill="none">
@@ -178,7 +226,8 @@ function AppItem({
   disabled?: boolean;
 }) {
   return (
-    <button type="button"
+    <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={label}
@@ -217,7 +266,8 @@ export default function Sidebar() {
   const pathname = usePathname();
   const isImport = pathname.startsWith("/import");
   const isSites = pathname.startsWith("/sites");
-  const isHome = !isImport && !isSites;
+  const isIrisSync = pathname.startsWith("/iris-sync");
+  const isHome = !isImport && !isSites && !isIrisSync;
 
   const [open, setOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -258,6 +308,13 @@ export default function Sidebar() {
           >
             <SitesIcon active={isSites} />
           </AppItem>
+          <AppItem
+            label="Iris Sync"
+            active={isIrisSync}
+            onClick={() => router.push("/iris-sync")}
+          >
+            <IrisSyncIcon active={isIrisSync} />
+          </AppItem>
           <AppItem label="Orders" disabled>
             <PlaceholderIcon />
           </AppItem>
@@ -270,7 +327,8 @@ export default function Sidebar() {
 
         {/* Collapse */}
         <div className="w-[60px] pb-3 flex justify-center">
-          <button type="button"
+          <button
+            type="button"
             onClick={() => setOpen(false)}
             title="Hide sidebar"
             className="flex h-7 w-7 items-center justify-center rounded-lg transition-colors"
@@ -297,7 +355,8 @@ export default function Sidebar() {
 
       {/* Re-open tab */}
       {!open && (
-        <button type="button"
+        <button
+          type="button"
           onClick={() => setOpen(true)}
           title="Show sidebar"
           className="flex h-14 w-5 shrink-0 items-center justify-center transition-colors"

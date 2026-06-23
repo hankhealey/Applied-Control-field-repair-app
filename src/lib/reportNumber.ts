@@ -36,6 +36,7 @@ export function emptyReport(id: string, reportNumber: string) {
     futureRecommendations: "",
     notes: "",
     repairScopeCompleted: false,
+    irisSyncedAt: null,
 
     valveMake: "",
     valveSerialNumber: "",

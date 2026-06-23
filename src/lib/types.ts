@@ -31,6 +31,7 @@ export type RepairReport = {
   futureRecommendations: string;
   notes: string;
   repairScopeCompleted: boolean;
+  irisSyncedAt: string | null;
 
   // Valve / Body
   valveMake: string;

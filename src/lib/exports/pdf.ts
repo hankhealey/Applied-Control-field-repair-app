@@ -571,6 +571,14 @@ async function buildReportSections(reportId: string, blankAsLeft: boolean) {
   return { sections, reportNumber: r.reportNumber };
 }
 
+export async function buildRepairPdfBlob(
+  reportId: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const { sections, reportNumber } = await buildReportSections(reportId, false);
+  const blob = await renderSectionsToPdfBlob(sections);
+  return { blob, filename: `${reportNumber}.pdf` };
+}
+
 export async function exportRepairPdf(reportId: string) {
   const { sections, reportNumber } = await buildReportSections(reportId, false);
   const blob = await renderSectionsToPdfBlob(sections);

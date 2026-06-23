@@ -15,6 +15,17 @@ db.version(2).stores({
   photos: "id, repairReportId, photoCategory, sequenceNumber",
 });
 
+db.version(3).stores({
+  sites: "id, title, customer",
+  reports: "id, reportNumber, status, siteId, tagOrUnit, irisSyncedAt",
+  findings: "id, repairReportId, componentCategory",
+  photos: "id, repairReportId, photoCategory, sequenceNumber",
+}).upgrade((tx) => {
+  return tx.table("reports").toCollection().modify((r) => {
+    if (r.irisSyncedAt === undefined) r.irisSyncedAt = null;
+  });
+});
+
 export async function deleteReportCascade(reportId: string) {
   await db.transaction("rw", db.reports, db.findings, db.photos, async () => {
     await db.findings.where("repairReportId").equals(reportId).delete();

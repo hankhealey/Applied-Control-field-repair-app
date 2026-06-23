@@ -53,6 +53,7 @@ const report: RepairReport = {
   notes:
     "Valve was rebuilt with preordered parts. Torque wrench MTE-011 B-7 bolting.",
   repairScopeCompleted: true,
+  irisSyncedAt: null,
 
   valveMake: "FISHER",
   valveSerialNumber: "F002363859",
