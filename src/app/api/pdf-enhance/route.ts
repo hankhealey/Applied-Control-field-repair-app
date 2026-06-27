@@ -127,15 +127,21 @@ export async function POST(req: NextRequest) {
     const data = (await res.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
-    const content = data.choices?.[0]?.message?.content ?? "{}";
+    const content = data.choices?.[0]?.message?.content;
+    if (content == null || content.trim() === "") {
+      return Response.json(
+        { error: "Enhancement failed: AI returned no content" },
+        { status: 502 },
+      );
+    }
 
     let extracted: Record<string, string>;
     try {
       extracted = JSON.parse(content);
     } catch {
       return Response.json(
-        { error: `Could not parse Groq response: ${content.slice(0, 80)}` },
-        { status: 502 },
+        { error: `Enhancement failed: unexpected AI response format` },
+        { status: 422 },
       );
     }
 
