@@ -195,7 +195,7 @@ export function splitModelSize(combined: string): { model: string; size: string 
 }
 
 // Returns exactly 153 values in column order
-function reportToRow(r: RepairReport): string[] {
+export function reportToRow(r: RepairReport): string[] {
   const [benchLow, benchHigh] = splitBenchSet(
     r.benchSetAsLeft || r.benchSetAsFound || "",
   );
