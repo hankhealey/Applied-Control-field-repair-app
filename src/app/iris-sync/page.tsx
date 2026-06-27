@@ -345,18 +345,20 @@ export default function IrisSyncPage() {
             </div>
           )}
 
-          {/* Do-not-refresh warning while running */}
+          {/* Do-not-edit warning while running */}
           {isRunning && (
             <div
-              className="rounded-xl border px-4 py-3 text-sm font-medium"
+              className="rounded-xl border px-4 py-3 text-sm font-medium space-y-1"
               style={{
                 background: "#1A0A00",
                 borderColor: "#92400E",
                 color: "#FCD34D",
               }}
             >
-              ⚠️ Do not close or refresh this tab during sync — progress will be
-              lost and you may need to re-sync.
+              <p>⚠️ Do not edit code during sync — hot-reload will abort the batch.</p>
+              <p className="font-normal text-xs" style={{ color: "#D97706" }}>
+                Do not close or refresh this tab either — progress will be lost.
+              </p>
             </div>
           )}
 
