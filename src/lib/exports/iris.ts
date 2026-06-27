@@ -515,3 +515,154 @@ export async function exportIrisCsvMulti(reportIds: string[]): Promise<void> {
       : `applied-control-iris-export-${new Date().toISOString().slice(0, 10)}.csv`;
   triggerDownload(filename, buildCsv(valid));
 }
+
+// ── Records CSV (79-column template) ─────────────────────────────────────────
+
+const RECORD_HEADERS = [
+  "\tId", "\tType", "\tDescription", "\tDetails", "\tRef. WO/MOC", "\tStatus",
+  "\tDate closed", "\tFollow-up", "\tTest criteria", "\tTest results",
+  "\tTest condition", "\tTest performance", "\tObservations", "\tOccurrence date",
+  "\tRecords event", "\tCustomer contact",
+  "\tValve health Condition (as left) score",
+  "\tValve health Performance (as left) score",
+  "\tValve health Condition (as found) score",
+  "\tValve health Performance (as found) score",
+  "\tVibration health",
+  "\tAs-Found Performance Set point tracking",
+  "\tAs-Found Performance Overshoot",
+  "\tAs-Found Performance Offset",
+  "\tAs-Found Performance Cycling",
+  "\tAs-Found Performance Speed",
+  "\tAs-Found Condition Valve friction",
+  "\tAs-Found Condition Rated travel",
+  "\tAs-Found Condition Seating profile",
+  "\tAs-Found Condition Dynamic error band",
+  "\tAs-Found Condition Drive signal",
+  "\tAs-Left Performance Set point tracking",
+  "\tAs-Left Performance Overshoot",
+  "\tAs-Left Performance Offset",
+  "\tAs-Left Performance Cycling",
+  "\tAs-Left Performance Speed",
+  "\tAs-Left Condition Valve friction",
+  "\tAs-Left Condition Rated travel",
+  "\tAs-Left Condition Seating profile",
+  "\tAs-Left Condition Dynamic error band",
+  "\tAs-Left Condition Drive signal",
+  "\tVibration analysis balance",
+  "\tVibration analysis alignment coupling",
+  "\tVibration analysis bearings",
+  "\tVibration analysis gears",
+  "\tVibration analysis resonance",
+  "\tVibration analysis looseness",
+  "\tVibration analysis electrical",
+  "\tVibration analysis process",
+  "\tVibration analysis structure piping",
+  "\tAs-Found Visual integrity Environmental (V/I)",
+  "\tAs-Found Visual integrity Health and safety",
+  "\tAs-Found Visual integrity Installation",
+  "\tAs-Found Visual integrity Mechanical integrity",
+  "\tAs-Found Visual integrity Obsolescence",
+  "\tAs-Found Visual integrity Tagging signage",
+  "\tAs-Left Visual integrity Environmental (V/I)",
+  "\tAs-Left Visual integrity Health and safety",
+  "\tAs-Left Visual integrity Installation",
+  "\tAs-Left Visual integrity Mechanical integrity",
+  "\tAs-Left Visual integrity Obsolescence",
+  "\tAs-Left Visual integrity Tagging signage",
+  "\tAssets", "\tKeywords",
+  "\tRecommendation 1 Title", "\tRecommendation 1 Status", "\tRecommendation 1 Content",
+  "\tRecommendation 2 Title", "\tRecommendation 2 Status", "\tRecommendation 2 Content",
+  "\tRecommendation 3 Title", "\tRecommendation 3 Status", "\tRecommendation 3 Content",
+  "\tRecommendation 4 Title", "\tRecommendation 4 Status", "\tRecommendation 4 Content",
+  "\tRecommendation 5 Title", "\tRecommendation 5 Status", "\tRecommendation 5 Content",
+]; // 79 columns
+
+function buildObservationsText(p: ParsedPdfReport): string {
+  const lines: string[] = [];
+
+  if (p.scopeOfWork) {
+    lines.push("Scope of Work");
+    lines.push(p.scopeOfWork);
+    lines.push("");
+  }
+
+  const calParts: string[] = [];
+  if (p.benchSetAsLeft) calParts.push(`Bench Set (As Left): ${p.benchSetAsLeft}`);
+  if (p.supplyPressureAsLeft) calParts.push(`Supply Pressure (As Left): ${p.supplyPressureAsLeft} psi`);
+  if (p.failActionAsLeft) calParts.push(`Fail Action: ${p.failActionAsLeft}`);
+  if (p.seatLeakClass) calParts.push(`Seat Leak Class: ${p.seatLeakClass}`);
+  if (calParts.length > 0) {
+    lines.push("Calibration Data");
+    lines.push(...calParts);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function parsedToRecordRow(p: ParsedPdfReport): (string | number)[] {
+  const obs = buildObservationsText(p);
+  const woRef = p.emrReference || p.crmodReference || "";
+  const e = ""; // empty cell shorthand
+
+  return [
+    // [0] Id — unquoted number (not tab-quoted)
+    0,
+    // [1-15] Core fields
+    "Preventative",      // Type
+    p.scopeOfWork,       // Description
+    e,                   // Details
+    woRef,               // Ref. WO/MOC
+    "Identified",        // Status
+    e, e, e, e, e, e,   // Date closed → Test performance (6 empty)
+    obs,                 // Observations [12]
+    p.repairDate,        // Occurrence date [13]
+    e,                   // Records event [14]
+    p.technician,        // Customer contact [15]
+    // [16-20] Valve/vibration health scores (5 empty)
+    e, e, e, e, e,
+    // [21-30] As-Found Performance (5) + Condition (5) = 10 empty
+    e, e, e, e, e, e, e, e, e, e,
+    // [31-40] As-Left Performance (5) + Condition (5) = 10 empty
+    e, e, e, e, e, e, e, e, e, e,
+    // [41-49] Vibration analysis (9 empty)
+    e, e, e, e, e, e, e, e, e,
+    // [50-61] Visual integrity As-Found (6) + As-Left (6) = 12 empty
+    e, e, e, e, e, e, e, e, e, e, e, e,
+    // [62] Assets — tag links to the asset in Iris
+    p.tagOrUnit,
+    // [63] Keywords
+    e,
+    // [64-78] Recommendations 1-5 (all empty — no recommendations in ParsedPdfReport)
+    e, e, e, e, e, e, e, e, e, e, e, e, e, e, e,
+  ];
+}
+
+function buildRecordCsv(parsed: ParsedPdfReport[]): string {
+  const headerLine = RECORD_HEADERS.map((h) => `"${h}"`).join(",");
+
+  const dataLines = parsed.map((p) => {
+    const cells = parsedToRecordRow(p);
+    return cells
+      .map((value, colIdx) => {
+        // Col 0 (Id) is always an unquoted number
+        if (colIdx === 0) return String(value);
+        const s = String(value ?? "");
+        if (s === "") return "";
+        return `"\t${s.replace(/"/g, '""')}"`;
+      })
+      .join(",");
+  });
+
+  return [headerLine, ...dataLines].join("\r\n");
+}
+
+/** Export parsed PDF reports as an Iris record CSV (79 cols) */
+export function exportRecordsCsvFromParsed(parsed: ParsedPdfReport[]): void {
+  if (!parsed.length) throw new Error("No parsed reports");
+  const date = new Date().toISOString().slice(0, 10);
+  const filename =
+    parsed.length === 1
+      ? `${parsed[0].tagOrUnit || "import"}-iris-record.csv`
+      : `pdf-iris-records-${date}.csv`;
+  triggerDownload(filename, buildRecordCsv(parsed));
+}

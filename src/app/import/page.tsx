@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Header from "@/components/Header";
 import {
   exportIrisCsvFromParsed,
+  exportRecordsCsvFromParsed,
   splitBenchSet,
   splitModelSize,
 } from "@/lib/exports/iris";
@@ -99,6 +100,9 @@ export default function ImportPage() {
   const [useAi, setUseAi] = useState(true);
   const [examples, setExamples] = useState<TrainingExample[]>([]);
   const [showExamples, setShowExamples] = useState(false);
+
+  // Export success toast
+  const [exportToast, setExportToast] = useState<string | null>(null);
 
   useEffect(() => {
     checkAiAvailable().then(setAiAvailable);
@@ -219,6 +223,14 @@ export default function ImportPage() {
   return (
     <div className="min-h-screen bg-zinc-50">
       <Header />
+
+      {/* Export success toast */}
+      {exportToast && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-medium text-white shadow-xl">
+          ✅ {exportToast}
+        </div>
+      )}
+
       <main className="mx-auto max-w-5xl px-3 py-4 sm:px-6 sm:py-6">
         {/* Title */}
         <div className="mb-4">
@@ -464,10 +476,19 @@ export default function ImportPage() {
               </h2>
               <button
                 type="button"
-                onClick={() => exportIrisCsvFromParsed(mergedResults)}
+                onClick={() => {
+                  exportIrisCsvFromParsed(mergedResults);
+                  exportRecordsCsvFromParsed(mergedResults);
+                  const label =
+                    mergedResults.length === 1
+                      ? mergedResults[0].tagOrUnit || "import"
+                      : `${mergedResults.length} reports`;
+                  setExportToast(`Downloaded 2 files for ${label}: assets CSV + records CSV`);
+                  setTimeout(() => setExportToast(null), 4000);
+                }}
                 className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
               >
-                Export {mergedResults.length} to IRIS CSV
+                Export {mergedResults.length} to IRIS (2 CSVs)
               </button>
             </div>
 
