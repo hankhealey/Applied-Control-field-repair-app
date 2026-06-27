@@ -37,6 +37,8 @@ export interface ParsedPdfReport {
   // Internal: which pass produced this result + any validation notes
   _passCount?: number;
   _warnings?: string[];
+  // Raw text for Ollama enhancement pass
+  _rawText?: string;
 }
 
 interface TItem {
@@ -51,6 +53,21 @@ interface TItem {
 
 function norm(s: string): string {
   return s.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * Strip a manufacturer/make prefix from a model string.
+ * "FISHER EZ 1-1/2" with make "FISHER" → "EZ 1-1/2"
+ * Only strips when the model starts with the make (case-insensitive).
+ */
+function stripMakePrefix(model: string, make: string): string {
+  if (!make || !model) return model;
+  const prefix = norm(make).toLowerCase();
+  const candidate = norm(model);
+  if (candidate.toLowerCase().startsWith(prefix)) {
+    return norm(candidate.slice(prefix.length));
+  }
+  return candidate;
 }
 
 /** Remove repeated-text patterns. "PV-4176B PV-4176B PV-4176B" → "PV-4176B" */
@@ -192,7 +209,7 @@ function rightOf(
   items: TItem[],
   origin: TItem,
   rowTol = 5,
-  maxGap = 25,
+  _maxGap = 25,
 ): TItem[] {
   return items
     .filter(
@@ -212,7 +229,7 @@ function buildValue(sorted: TItem[], maxTokens = 5, maxGap = 22): string {
   for (let i = 1; i < Math.min(sorted.length, maxTokens); i++) {
     const gap = sorted[i].x - lastRight;
     if (gap > maxGap) break;
-    value += " " + sorted[i].str;
+    value += ` ${sorted[i].str}`;
     lastRight = sorted[i].x + sorted[i].w;
   }
   return dedup(norm(value));
@@ -334,8 +351,8 @@ function validateResult(result: ParsedPdfReport): ValidationIssue[] {
  */
 function extractFields(
   scope: TItem[],
-  allItems: TItem[],
-  pageWidth: number,
+  _allItems: TItem[],
+  _pageWidth: number,
   findingsY: number,
   strategy: "first" | "rightmost" | "strict",
 ): Omit<ParsedPdfReport, "filename" | "_passCount" | "_warnings"> {
@@ -538,16 +555,23 @@ function extractFields(
         "Act. Model",
         "Actuator Model/Size",
         "Act. Model / Size",
+        "Actuator Size",
+        "Act. Size",
       ],
       "rightmost",
     ) ||
     (() => {
-      // If there are 2+ "Model / Size" labels, the second one is actuator
-      const hits = safe.filter((i) => norm(i.str) === "Model / Size");
+      // If there are 2+ "Model / Size" labels, the second is actuator.
+      // But stop here — the third would be the positioner.
+      const hits = safe
+        .filter((i) => norm(i.str) === "Model / Size")
+        .sort((a, b) => a.y - b.y);
       if (hits.length >= 2) {
-        const second = hits.sort((a, b) => a.y - b.y)[1];
-        const r = rightOf(safe, second);
-        return r.length ? buildValue(r) : "";
+        const r = rightOf(safe, hits[1]);
+        const val = r.length ? buildValue(r) : "";
+        // DVC6200 and similar are positioners — skip if found here
+        if (val && /dvc|svi|hart|3582/i.test(val)) return "";
+        return val;
       }
       return "";
     })();
@@ -586,11 +610,29 @@ function extractFields(
     "rightmost",
   );
 
-  const positionerModelAction = findValue(
-    safe,
-    ["Model / Action", "Pos. Model / Action", "Positioner Model", "Pos. Model"],
-    "rightmost",
-  );
+  const positionerModelAction =
+    findValue(
+      safe,
+      [
+        "Model / Action",
+        "Pos. Model / Action",
+        "Positioner Model",
+        "Pos. Model",
+        "Positioner Model/Size",
+      ],
+      "rightmost",
+    ) ||
+    (() => {
+      // Third "Model / Size" label (after valve and actuator) is positioner
+      const hits = safe
+        .filter((i) => norm(i.str) === "Model / Size")
+        .sort((a, b) => a.y - b.y);
+      if (hits.length >= 3) {
+        const r = rightOf(safe, hits[2]);
+        return r.length ? buildValue(r) : "";
+      }
+      return "";
+    })();
 
   // ── Calibration — AS LEFT row ─────────────────────────────────────────────
   // Calibration is on page 1; use `scope` (not `safe`) since calibration
@@ -633,18 +675,21 @@ function extractFields(
     scopeOfWork,
     valveMake,
     valveSerialNumber,
-    valveModelSize,
+    valveModelSize: stripMakePrefix(valveModelSize, valveMake),
     valveClassConnection,
     valvePackingConfiguration,
     valveTrimCharPort,
     valveFlowDirection,
     actuatorMake,
     actuatorSerialNumber,
-    actuatorModelSize,
+    actuatorModelSize: stripMakePrefix(actuatorModelSize, actuatorMake),
     actuatorActionHandwheel,
     positionerMake,
     positionerSerialNumber,
-    positionerModelAction,
+    positionerModelAction: stripMakePrefix(
+      positionerModelAction,
+      positionerMake,
+    ),
     ratedTravel,
     benchSetAsLeft,
     openSignalAsLeft,
@@ -716,6 +761,12 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   const { page1, all, pageWidth, findingsStartY } =
     await extractTextItems(file);
 
+  // Flat raw text for Ollama enhancement (first 12 000 chars is enough for any report)
+  const rawText = all
+    .map((i) => i.str)
+    .join(" ")
+    .slice(0, 12_000);
+
   // If no text found at all (image-based PDF)
   if (all.length < 10) {
     return {
@@ -752,6 +803,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
       actuatorAirAction: "",
       seatLeakClass: "",
       _passCount: 0,
+      _rawText: rawText,
       _warnings: [
         "PDF appears to be image-based — text could not be extracted. Enter fields manually.",
       ],
@@ -766,7 +818,13 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   let issues = validateResult({ filename: file.name, ...fields });
 
   if (issues.length === 0) {
-    return { filename: file.name, ...fields, _passCount: 1, _warnings: [] };
+    return {
+      filename: file.name,
+      ...fields,
+      _passCount: 1,
+      _rawText: rawText,
+      _warnings: [],
+    };
   }
 
   warnings.push(
@@ -782,6 +840,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
       filename: file.name,
       ...fields,
       _passCount: 2,
+      _rawText: rawText,
       _warnings: warnings,
     };
   }
@@ -825,5 +884,11 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     }
   }
 
-  return { filename: file.name, ...fields, _passCount: 3, _warnings: warnings };
+  return {
+    filename: file.name,
+    ...fields,
+    _passCount: 3,
+    _rawText: rawText,
+    _warnings: warnings,
+  };
 }

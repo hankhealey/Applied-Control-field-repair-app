@@ -165,10 +165,33 @@ const HEADERS = [
 ]; // 153 columns
 
 // Split "3-15" bench set string into [lower, upper]
-function splitBenchSet(value: string): [string, string] {
+export function splitBenchSet(value: string): [string, string] {
   const m = value.match(/^([0-9.]+)\s*[-–]\s*([0-9.]+)/);
   if (m) return [m[1], m[2]];
   return [value, ""];
+}
+
+/**
+ * Split a combined "model size" string into separate model and size parts.
+ * "EZ 1-1/2""  → { model: "EZ", size: '1-1/2"' }
+ * "DVC6200"    → { model: "DVC6200", size: "DVC6200" }   (no size found — use same for both)
+ *
+ * Size pattern: a dimension at the end of the string that starts with a digit,
+ * optionally containing fractions (1-1/2) and ending with " or "in".
+ */
+export function splitModelSize(combined: string): { model: string; size: string } {
+  if (!combined) return { model: "", size: "" };
+  const s = combined.trim();
+  // Match a trailing dimension: e.g. "1-1/2"", "3/4 in", "2""
+  const m = s.match(/\s+(\d[\d/-]*\s*(?:"|in\.?|inch)?)\s*$/i);
+  if (m) {
+    return {
+      model: s.slice(0, s.length - m[0].length).trim(),
+      size: m[1].trim(),
+    };
+  }
+  // No size component — put the same value in both columns (e.g. DVC6200)
+  return { model: s, size: s };
 }
 
 // Returns exactly 153 values in column order
@@ -178,16 +201,22 @@ function reportToRow(r: RepairReport): string[] {
   );
   const supplyPressure = r.supplyPressureAsLeft || r.supplyPressureAsFound;
   const failAction = r.failActionAsLeft || r.failActionAsFound;
+  const { model: valveModel, size: valveSize } = splitModelSize(
+    r.valveModelSize || "",
+  );
+  const { model: actuatorModel, size: actuatorSize } = splitModelSize(
+    r.actuatorModelSize || "",
+  );
 
   return [
     // ── 0-10  Basic ──────────────────────────────────────────────────────────
     r.tagOrUnit,
     "Control Valve",
-    r.siteTitle,
-    r.process,
+    "", // [2] Area — intentionally left blank
+    "", // [3] Application — intentionally left blank
     "",
     r.scopeOfWork,
-    r.siteTitle,
+    "", // [6] Location — intentionally left blank
     "",
     r.emrReference,
     r.crmodReference,
@@ -196,10 +225,10 @@ function reportToRow(r: RepairReport): string[] {
     // ── 11-41  Valve (status + 30 fields) ────────────────────────────────────
     "No", // [11] Valve status  ← unquoted by STATUS_COLS
     r.valveMake, // [12]
-    r.valveModelSize, // [13]
+    valveModel, // [13] model (e.g. "EZ")
     r.valveSerialNumber, // [14]
     "", // [15] vendor asset id
-    r.valveModelSize, // [16] size
+    valveSize, // [16] size (e.g. '1-1/2"')
     r.valveClassConnection, // [17] pressure class
     r.ratedTravel, // [18]
     "", // [19] seat material
@@ -229,8 +258,8 @@ function reportToRow(r: RepairReport): string[] {
     // ── 42-62  Actuator (status + 20 fields) ─────────────────────────────────
     "No", // [42] Actuator status  ← unquoted
     r.actuatorMake, // [43]
-    r.actuatorModelSize, // [44]
-    r.actuatorModelSize, // [45] size
+    actuatorModel, // [44] model
+    actuatorSize, // [45] size
     r.actuatorSerialNumber, // [46]
     "", // [47] vendor asset id
     benchLow, // [48] lower bench set

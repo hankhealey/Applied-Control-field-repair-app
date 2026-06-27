@@ -3,7 +3,7 @@ import { computeSessionToken, SESSION_COOKIE } from "@/lib/auth";
 
 const PUBLIC = ["/login", "/privacy", "/api/auth"];
 
-export async function proxy(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC.some((p) => pathname.startsWith(p))) {

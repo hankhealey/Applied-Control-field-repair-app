@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Page } from "playwright";
-import { chromium } from "playwright";
 import type { NextRequest } from "next/server";
+import type { Browser, Page } from "playwright";
+import { chromium } from "playwright";
 import type { RepairFinding, RepairReport } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +29,7 @@ export type SyncEvent = {
   synced?: number;
   skipped?: number;
   total?: number;
+  screenshot?: string; // base64 PNG for live preview
 };
 
 export type IrisSyncReportPayload = {
@@ -38,7 +39,7 @@ export type IrisSyncReportPayload = {
   pdfFilename: string;
 };
 
-// ── SSE helper ────────────────────────────────────────────────────────────────
+// ── SSE helpers ───────────────────────────────────────────────────────────────
 
 function sse(event: SyncEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
@@ -52,15 +53,13 @@ function buildObservations(r: RepairReport, findings: RepairFinding[]): string {
   if (findings.length > 0) {
     lines.push("Observations & Findings");
     for (const f of findings) {
-      if (f.conditionFound) {
+      if (f.conditionFound)
         lines.push(`${f.componentName}: ${f.conditionFound}`);
-      }
     }
     lines.push("");
-
     lines.push("Work Performed Summary");
     for (const f of findings) {
-      const parts = [`${f.componentName}`];
+      const parts = [f.componentName];
       if (f.conditionFound) parts.push(`As Found: ${f.conditionFound}`);
       if (f.recommendedAction) parts.push(`Action: ${f.recommendedAction}`);
       if (f.asLeftAction) parts.push(`As Left: ${f.asLeftAction}`);
@@ -89,35 +88,203 @@ function buildObservations(r: RepairReport, findings: RepairFinding[]): string {
   return lines.join("\n").trim();
 }
 
+// ── Screenshot helper ─────────────────────────────────────────────────────────
+
+async function emitScreenshot(
+  page: Page,
+  emit: (e: SyncEvent) => void,
+): Promise<void> {
+  try {
+    const buf = await page.screenshot({ type: "jpeg", quality: 60 });
+    emit({
+      report: "system",
+      step: "asset_find",
+      status: "info",
+      screenshot: buf.toString("base64"),
+    });
+  } catch {
+    // Non-fatal — screenshot failed during navigation
+  }
+}
+
+// ── ACTIONS menu helper ───────────────────────────────────────────────────────
+// Iris uses MUI DataGrid toolbars. The button label may vary in casing and the
+// button may be inside a specific toolbar section. Tries several patterns and
+// emits a screenshot first so we can see the page state if it fails.
+
+async function clickActionsMenu(
+  page: Page,
+  emit: (e: SyncEvent) => void,
+  scope?: import("playwright").Locator,
+): Promise<void> {
+  await emitScreenshot(page, emit);
+
+  const root = scope ?? page;
+
+  // Try visible button with any casing of "ACTIONS", then common icon-only fallbacks
+  const btn = root
+    .getByRole("button", { name: /^actions$/i })
+    .or(root.locator('button:has-text("ACTIONS"), button:has-text("Actions"), button:has-text("actions")'))
+    .first();
+
+  await btn.waitFor({ state: "visible", timeout: 10_000 });
+  await btn.click();
+  await page.waitForTimeout(300);
+}
+
 // ── Login ─────────────────────────────────────────────────────────────────────
 
 const IRIS_URL = "https://iris-appliedcontrols.bluemarvel.ai";
 
-async function login(
-  page: Page,
-  irisUser: string,
-  irisPassword: string,
-): Promise<void> {
+async function login(page: Page, emit: (e: SyncEvent) => void): Promise<void> {
   await page.goto(IRIS_URL);
-  // Redirects to Auth0 Universal Login
-  await page.waitForURL(/auth0\.com/, { timeout: 15_000 });
+  await page
+    .waitForLoadState("networkidle", { timeout: 15_000 })
+    .catch(() => {});
 
-  await page.fill('input[name="username"]', irisUser);
-  await page.fill('input[name="password"]', irisPassword);
-  await page.click('button[type="submit"]');
+  await emitScreenshot(page, emit);
 
-  // Wait for redirect back to Iris
-  await page.waitForURL(`${IRIS_URL}/**`, { timeout: 20_000 }).catch(() => {
-    // Some Auth0 setups redirect to root
-    return page.waitForURL(IRIS_URL, { timeout: 10_000 });
+  // Already logged in — nothing to do.
+  if (!page.url().includes("auth0.com")) {
+    return;
+  }
+
+  // Auth0 is showing — ask the user to log in manually in the browser window.
+  emit({
+    report: "system",
+    step: "asset_find",
+    status: "info",
+    message:
+      "🔐 Please log into Iris in the browser window that just opened. Waiting up to 2 minutes…",
   });
 
-  // Confirm we're logged in (not on an error page)
+  // Wait for navigation to land back on Iris (user completes login).
+  await page.waitForURL(
+    (url) => url.href.startsWith(IRIS_URL) && !url.href.includes("auth0.com"),
+    { timeout: 120_000 },
+  );
+
+  await page
+    .waitForLoadState("networkidle", { timeout: 10_000 })
+    .catch(() => {});
+
   if (page.url().includes("auth0.com")) {
-    throw Object.assign(new Error("Login failed — check Iris credentials"), {
-      errorType: "ABORT_BATCH",
-    });
+    throw Object.assign(
+      new Error(
+        "Login timed out — please try again and complete login within 2 minutes",
+      ),
+      { errorType: "ABORT_BATCH" },
+    );
   }
+
+  await emitScreenshot(page, emit);
+}
+
+// ── Select customer + site ────────────────────────────────────────────────────
+
+async function selectSite(
+  page: Page,
+  irisCustomer: string,
+  irisSite: string,
+  emit: (e: SyncEvent) => void,
+): Promise<void> {
+  if (!irisCustomer && !irisSite) return;
+
+  emit({
+    report: "system",
+    step: "asset_find",
+    status: "info",
+    message: `Selecting site: ${irisCustomer} → ${irisSite}`,
+  });
+
+  // Customer dropdown — always re-query; don't cache across selections because
+  // MUI remounts the site combobox after the customer changes.
+  if (irisCustomer) {
+    const customerDropdown = page.getByRole("combobox").first();
+    await customerDropdown.waitFor({ state: "visible", timeout: 10_000 });
+    await customerDropdown.click();
+    await page.waitForTimeout(500);
+
+    const customerOption = page
+      .getByRole("option", { name: new RegExp(irisCustomer, "i") })
+      .or(page.getByText(irisCustomer, { exact: false }).first())
+      .first();
+
+    if ((await customerOption.count()) > 0) {
+      await customerOption.click();
+    } else {
+      // Dismiss open dropdown and continue — don't abort the whole batch
+      await page.keyboard.press("Escape");
+      emit({
+        report: "system",
+        step: "asset_find",
+        status: "info",
+        message: `Customer "${irisCustomer}" not found in dropdown — skipping site filter`,
+      });
+    }
+
+    // Wait for the page to settle and the site dropdown to become enabled
+    await page
+      .waitForLoadState("networkidle", { timeout: 10_000 })
+      .catch(() => {});
+    await page.waitForTimeout(600);
+    await emitScreenshot(page, emit);
+  }
+
+  // Site dropdown — must be re-queried AFTER customer settles because MUI
+  // remounts or disables it while loading the filtered site list.
+  if (irisSite) {
+    // The site dropdown is the second combobox; wait for it to be enabled
+    const siteDropdown = page.getByRole("combobox").nth(1);
+    await siteDropdown
+      .waitFor({ state: "visible", timeout: 10_000 })
+      .catch(() => {});
+
+    if ((await siteDropdown.count()) === 0) {
+      emit({
+        report: "system",
+        step: "asset_find",
+        status: "info",
+        message: "Site dropdown not found — continuing without site filter",
+      });
+    } else {
+      // Wait for it to be enabled (not disabled while loading options)
+      await page.waitForFunction(
+        () => {
+          const combos = document.querySelectorAll('[role="combobox"]');
+          const el = combos[1] as HTMLElement | undefined;
+          return el && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true";
+        },
+        { timeout: 10_000 },
+      ).catch(() => {});
+
+      await emitScreenshot(page, emit);
+      await siteDropdown.click();
+      await page.waitForTimeout(600);
+
+      const siteOption = page
+        .getByRole("option", { name: new RegExp(irisSite, "i") })
+        .or(page.getByText(irisSite, { exact: false }).first())
+        .first();
+
+      if ((await siteOption.count()) > 0) {
+        await siteOption.click();
+        await page
+          .waitForLoadState("networkidle", { timeout: 10_000 })
+          .catch(() => {});
+      } else {
+        await page.keyboard.press("Escape");
+        emit({
+          report: "system",
+          step: "asset_find",
+          status: "info",
+          message: `Site "${irisSite}" not found in dropdown — continuing without site filter`,
+        });
+      }
+    }
+  }
+
+  await emitScreenshot(page, emit);
 }
 
 // ── Navigate to assets page ───────────────────────────────────────────────────
@@ -126,15 +293,12 @@ async function goToAssets(page: Page): Promise<void> {
   await page.goto(`${IRIS_URL}/assets`);
   await page.waitForLoadState("networkidle", { timeout: 20_000 });
 
-  // Fallback: if the URL didn't change to /assets, try clicking the sidebar
   if (!page.url().includes("/assets")) {
-    // Look for the Assets sidebar link (aria-label or link text)
     const assetNav = page
       .getByRole("link", { name: /assets/i })
       .or(page.locator('nav a[href*="asset"]'))
       .first();
-
-    if (await assetNav.count() > 0) {
+    if ((await assetNav.count()) > 0) {
       await assetNav.click();
       await page.waitForLoadState("networkidle", { timeout: 15_000 });
     }
@@ -147,54 +311,63 @@ async function findOrCreateAsset(
   page: Page,
   report: RepairReport,
   emit: (e: SyncEvent) => void,
+  abort: { requested: boolean },
 ): Promise<void> {
   const tag = report.tagOrUnit;
   emit({
     report: report.id,
     step: "asset_find",
     status: "info",
-    message: `Searching for asset "${tag}"`,
+    message: `Searching for "${tag}"`,
   });
 
-  await goToAssets(page);
+  if (abort.requested)
+    throw Object.assign(new Error("Aborted"), { errorType: "ABORT_BATCH" });
 
-  // Try to find asset link in the table
+  await goToAssets(page);
+  await emitScreenshot(page, emit);
+
+  // Try direct link match first
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const assetLink = page
-    .getByRole("link", { name: new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) })
+    .getByRole("link", { name: new RegExp(`^${escaped}$`) })
     .first();
 
-  if (await assetLink.count() > 0) {
+  if ((await assetLink.count()) > 0) {
     emit({
       report: report.id,
       step: "asset_find",
       status: "ok",
-      message: `Found asset "${tag}"`,
+      message: `Found "${tag}"`,
     });
     await assetLink.click();
     await page.waitForLoadState("networkidle", { timeout: 15_000 });
+    await emitScreenshot(page, emit);
     return;
   }
 
-  // Asset not found — search first in case of pagination
+  // Try searching if table might be paginated
   const searchInput = page
     .getByPlaceholder(/search/i)
     .or(page.locator('input[type="search"]'))
-    .or(page.locator('input[placeholder*="filter" i]'))
     .first();
 
-  if (await searchInput.count() > 0) {
+  if ((await searchInput.count()) > 0) {
     await searchInput.fill(tag);
-    await page.waitForTimeout(800); // debounce
-    const filtered = page.getByRole("link", { name: new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).first();
-    if (await filtered.count() > 0) {
+    await page.waitForTimeout(800);
+    const filtered = page
+      .getByRole("link", { name: new RegExp(`^${escaped}$`) })
+      .first();
+    if ((await filtered.count()) > 0) {
       emit({
         report: report.id,
         step: "asset_find",
         status: "ok",
-        message: `Found asset "${tag}" via search`,
+        message: `Found "${tag}" via search`,
       });
       await filtered.click();
       await page.waitForLoadState("networkidle", { timeout: 15_000 });
+      await emitScreenshot(page, emit);
       return;
     }
   }
@@ -204,41 +377,49 @@ async function findOrCreateAsset(
     report: report.id,
     step: "asset_create",
     status: "info",
-    message: `Asset "${tag}" not found, creating…`,
+    message: `Creating asset "${tag}"`,
   });
 
-  // Click the top-level ACTIONS button on the assets page
-  await page.getByRole("button", { name: "ACTIONS" }).first().click();
-  await page.waitForTimeout(300);
+  await clickActionsMenu(page, emit);
 
-  // Click "Create asset" in the dropdown
   await page
     .getByRole("menuitem", { name: /create.?asset/i })
     .or(page.getByText("Create asset", { exact: false }))
     .first()
     .click();
 
-  // Wait for the Create asset modal
-  await page.waitForSelector('text=Create asset', { timeout: 10_000 });
+  // Wait for the Create Asset dialog/drawer to appear
+  await page.waitForSelector('[role="dialog"], [role="main"] form', {
+    timeout: 10_000,
+  });
+  await emitScreenshot(page, emit);
 
-  // Fill Tag field (the label is "Tag")
-  await page.getByLabel("Tag").fill(tag);
+  // Scope to the dialog so we don't match MUI DataGrid column-header buttons
+  // that also carry aria-label="Tag column menu"
+  const dialog = page
+    .getByRole("dialog")
+    .or(page.locator('form:has(button:has-text("Create"))'))
+    .first();
 
-  // Asset type is already "Control Valve" by default — skip if OK
-  // If you need a different type, set it here:
-  // await page.getByLabel('Asset type').selectOption('Control Valve');
+  const tagInput = dialog
+    .getByRole("textbox", { name: /^tag$/i })
+    .or(dialog.locator('input[name="tag"], input[id*="tag" i]'))
+    .or(dialog.getByLabel(/^tag$/i))
+    .first();
+  await tagInput.fill(tag);
 
-  // Service description (optional)
   if (report.scopeOfWork) {
-    const svcDesc = page.getByLabel(/service.?description/i).first();
-    if (await svcDesc.count() > 0) {
+    const svcDesc = dialog.getByLabel(/service.?description/i).first();
+    if ((await svcDesc.count()) > 0)
       await svcDesc.fill(report.scopeOfWork.slice(0, 200));
-    }
   }
 
-  // Click CREATE AND OPEN
-  await page.getByRole("button", { name: /create.?and.?open/i }).first().click();
+  await page
+    .getByRole("button", { name: /create.?and.?open/i })
+    .first()
+    .click();
   await page.waitForLoadState("networkidle", { timeout: 20_000 });
+  await emitScreenshot(page, emit);
 
   emit({
     report: report.id,
@@ -254,104 +435,109 @@ async function updateComponents(
   page: Page,
   report: RepairReport,
   emit: (e: SyncEvent) => void,
+  abort: { requested: boolean },
 ): Promise<void> {
   emit({
     report: report.id,
     step: "specs",
     status: "info",
-    message: "Updating component specs",
+    message: "Updating components",
   });
 
-  // Map: [Iris component label, manufacturer, model, serial]
   const components: [string, string, string, string][] = [];
-
-  if (report.valveMake || report.valveModelSize || report.valveSerialNumber) {
-    components.push(["Valve", report.valveMake, report.valveModelSize, report.valveSerialNumber]);
-  }
-  if (report.actuatorMake || report.actuatorModelSize || report.actuatorSerialNumber) {
-    components.push(["Actuator", report.actuatorMake, report.actuatorModelSize, report.actuatorSerialNumber]);
-  }
-  if (report.positionerMake || report.positionerModelAction || report.positionerSerialNumber) {
-    components.push(["Device 1", report.positionerMake, report.positionerModelAction, report.positionerSerialNumber]);
-  }
+  if (report.valveMake || report.valveModelSize || report.valveSerialNumber)
+    components.push([
+      "Valve",
+      report.valveMake,
+      report.valveModelSize,
+      report.valveSerialNumber,
+    ]);
+  if (
+    report.actuatorMake ||
+    report.actuatorModelSize ||
+    report.actuatorSerialNumber
+  )
+    components.push([
+      "Actuator",
+      report.actuatorMake,
+      report.actuatorModelSize,
+      report.actuatorSerialNumber,
+    ]);
+  if (
+    report.positionerMake ||
+    report.positionerModelAction ||
+    report.positionerSerialNumber
+  )
+    components.push([
+      "Device 1",
+      report.positionerMake,
+      report.positionerModelAction,
+      report.positionerSerialNumber,
+    ]);
 
   for (const [label, manufacturer, model, serial] of components) {
-    // Find the row for this component type in the table
+    if (abort.requested)
+      throw Object.assign(new Error("Aborted"), { errorType: "ABORT_BATCH" });
+
     const row = page.locator("tr", { hasText: label }).first();
 
-    if (await row.count() > 0) {
-      // Click the three-dot menu on this row
+    if ((await row.count()) > 0) {
       const threeDotsBtn = row
         .getByRole("button", { name: /more|menu|options/i })
-        .or(row.locator('button[aria-haspopup]'))
+        .or(row.locator("button[aria-haspopup]"))
         .or(row.locator('button:has-text("⋮"), button:has-text("…")'))
         .first();
-
       await threeDotsBtn.click();
       await page.waitForTimeout(300);
-
-      // Click Edit
       await page
         .getByRole("menuitem", { name: /edit/i })
         .or(page.getByText("Edit", { exact: true }))
         .first()
         .click();
     } else {
-      // Component row doesn't exist — add via ACTIONS
       const compSection = page
         .locator("section, div")
         .filter({ hasText: "Components and Specifications" })
         .first();
-
-      await compSection
-        .getByRole("button", { name: "ACTIONS" })
-        .click();
-      await page.waitForTimeout(300);
-
+      await clickActionsMenu(page, emit, compSection);
       await page
         .getByRole("menuitem", { name: /add.?component/i })
         .or(page.getByText("Add component", { exact: false }))
         .first()
         .click();
-
-      // Select the component type from a dropdown
       const typeSelect = page
         .getByLabel(/component.?type/i)
         .or(page.getByRole("combobox").first());
       await typeSelect.click();
-      await page
-        .getByRole("option", { name: label })
-        .click();
+      await page.getByRole("option", { name: label }).click();
     }
 
-    // Fill in the edit/add form fields
     await page.waitForTimeout(300);
+    await emitScreenshot(page, emit);
 
     const mfrField = page.getByLabel(/manufacturer/i).last();
-    if (await mfrField.count() > 0 && manufacturer) {
+    if ((await mfrField.count()) > 0 && manufacturer) {
       await mfrField.clear();
       await mfrField.fill(manufacturer);
     }
 
     const modelField = page.getByLabel(/^model$/i).last();
-    if (await modelField.count() > 0 && model) {
+    if ((await modelField.count()) > 0 && model) {
       await modelField.clear();
       await modelField.fill(model);
     }
 
     const serialField = page.getByLabel(/serial.?number/i).last();
-    if (await serialField.count() > 0 && serial) {
+    if ((await serialField.count()) > 0 && serial) {
       await serialField.clear();
       await serialField.fill(serial);
     }
 
-    // Save
     await page
       .getByRole("button", { name: /^save$/i })
       .or(page.getByRole("button", { name: /confirm|update/i }))
       .first()
       .click();
-
     await page.waitForLoadState("networkidle", { timeout: 10_000 });
   }
 
@@ -370,25 +556,28 @@ async function createRecord(
   report: RepairReport,
   findings: RepairFinding[],
   emit: (e: SyncEvent) => void,
+  abort: { requested: boolean },
 ): Promise<void> {
   emit({
     report: report.id,
     step: "report_create",
     status: "info",
-    message: "Creating Iris record",
+    message: "Creating record",
   });
 
-  // Click RECORDS tab at the bottom of the asset page
+  if (abort.requested)
+    throw Object.assign(new Error("Aborted"), { errorType: "ABORT_BATCH" });
+
   await page.getByRole("tab", { name: /records/i }).click();
   await page.waitForTimeout(500);
 
-  // Click the button to create a new record.
-  // Try ACTIONS button first, then a direct "Create record" button.
   const recordsActions = page
-    .getByRole("button", { name: "ACTIONS" })
+    .getByRole("button", { name: /^actions$/i })
+    .or(page.locator('button:has-text("ACTIONS"), button:has-text("Actions")'))
     .last();
-
-  if (await recordsActions.count() > 0) {
+  if ((await recordsActions.count()) > 0) {
+    await emitScreenshot(page, emit);
+    await recordsActions.waitFor({ state: "visible", timeout: 10_000 });
     await recordsActions.click();
     await page.waitForTimeout(300);
     await page
@@ -399,16 +588,20 @@ async function createRecord(
   } else {
     await page
       .getByRole("button", { name: /create.?record/i })
-      .or(page.getByRole("link", { name: /create.?record/i }))
       .first()
       .click();
   }
 
-  // Modal: "Create record for asset: <tag>"
-  await page.waitForSelector("text=Create record for asset", { timeout: 10_000 });
+  await page.waitForSelector("text=Create record for asset", {
+    timeout: 10_000,
+  });
+  await emitScreenshot(page, emit);
 
   // Select Type = Preventative
-  const typeDropdown = page.getByLabel("Type").or(page.getByRole("combobox")).first();
+  const typeDropdown = page
+    .getByLabel("Type")
+    .or(page.getByRole("combobox"))
+    .first();
   await typeDropdown.click();
   await page.waitForTimeout(300);
   await page
@@ -417,61 +610,46 @@ async function createRecord(
     .first()
     .click();
 
-  // Click CREATE AND OPEN
-  await page.getByRole("button", { name: /create.?and.?open/i }).first().click();
-
-  // Wait for the record detail page to load
+  await page
+    .getByRole("button", { name: /create.?and.?open/i })
+    .first()
+    .click();
   await page.waitForLoadState("networkidle", { timeout: 20_000 });
+  await emitScreenshot(page, emit);
 
-  // ── Now fill in the record detail fields ───────────────────────────────────
-
-  // Occurrence date (repair date)
+  // Fill record detail fields
   if (report.repairDate) {
     const dateField = page
       .getByLabel(/occurrence.?date/i)
       .or(page.locator('input[placeholder="YYYY-MM-DD"]'))
       .first();
-    if (await dateField.count() > 0) {
-      await dateField.fill(report.repairDate);
-    }
+    if ((await dateField.count()) > 0) await dateField.fill(report.repairDate);
   }
 
-  // Ref. WO/MOC — use emrReference, fallback to crmodReference
   const woRef = report.emrReference || report.crmodReference || "";
   if (woRef) {
-    const refField = page
-      .getByLabel(/ref.*wo|wo.*moc|work.?order/i)
-      .or(page.locator('input[placeholder*="WO"]'))
-      .first();
-    if (await refField.count() > 0) {
-      await refField.fill(woRef);
-    }
+    const refField = page.getByLabel(/ref.*wo|wo.*moc|work.?order/i).first();
+    if ((await refField.count()) > 0) await refField.fill(woRef);
   }
 
-  // Observations (rich text editor)
   const obsText = buildObservations(report, findings);
   if (obsText) {
-    // The rich text editor is a contenteditable div
     const obsEditor = page
       .locator('[contenteditable="true"]')
       .or(page.locator(".ProseMirror, .ql-editor, .DraftEditor-root"))
       .first();
-
-    if (await obsEditor.count() > 0) {
+    if ((await obsEditor.count()) > 0) {
       await obsEditor.click();
-      // Select all and replace
       await page.keyboard.press("Control+a");
       await obsEditor.fill(obsText);
     }
   }
 
-  // Save the record (look for a Save button; some editors auto-save)
   const saveBtn = page
     .getByRole("button", { name: /^save$/i })
     .or(page.getByRole("button", { name: /save.?record/i }))
     .first();
-
-  if (await saveBtn.count() > 0) {
+  if ((await saveBtn.count()) > 0) {
     await saveBtn.click();
     await page.waitForLoadState("networkidle", { timeout: 10_000 });
   }
@@ -480,7 +658,7 @@ async function createRecord(
     report: report.id,
     step: "report_create",
     status: "ok",
-    message: "Record created and filled",
+    message: "Record created",
   });
 }
 
@@ -491,6 +669,7 @@ async function attachPdf(
   report: RepairReport,
   pdfPath: string,
   emit: (e: SyncEvent) => void,
+  abort: { requested: boolean },
 ): Promise<void> {
   emit({
     report: report.id,
@@ -499,52 +678,41 @@ async function attachPdf(
     message: "Attaching PDF",
   });
 
-  // Click ATTACHMENTS tab
+  if (abort.requested)
+    throw Object.assign(new Error("Aborted"), { errorType: "ABORT_BATCH" });
+
   await page.getByRole("tab", { name: /attachments/i }).click();
   await page.waitForTimeout(500);
+  await emitScreenshot(page, emit);
 
-  // Click ACTIONS → upload or click the upload button directly
-  const attachActions = page
-    .getByRole("button", { name: "ACTIONS" })
-    .last();
-
-  let fileInput: ReturnType<Page["locator"]> | null = null;
-
-  // Check if there's a direct file input visible
   const directInput = page.locator('input[type="file"]').first();
-  if (await directInput.count() > 0) {
-    fileInput = directInput;
-  } else if (await attachActions.count() > 0) {
-    // Use the file chooser approach (works regardless of how the dialog opens)
-    const [chooser] = await Promise.all([
-      page.waitForEvent("filechooser", { timeout: 10_000 }),
-      (async () => {
-        await attachActions.click();
-        await page.waitForTimeout(300);
-        await page
-          .getByRole("menuitem", { name: /upload|add.?file|attach/i })
-          .or(page.getByText("Upload", { exact: false }))
-          .first()
-          .click();
-      })(),
-    ]);
-    await chooser.setFiles(pdfPath);
-    await page.waitForLoadState("networkidle", { timeout: 20_000 });
-
-    emit({
-      report: report.id,
-      step: "pdf_attach",
-      status: "ok",
-      message: "PDF attached",
-    });
-    return;
+  if ((await directInput.count()) > 0) {
+    await directInput.setInputFiles(pdfPath);
+  } else {
+    const attachActions = page
+      .getByRole("button", { name: /^actions$/i })
+      .or(page.locator('button:has-text("ACTIONS"), button:has-text("Actions")'))
+      .last();
+    if ((await attachActions.count()) > 0) {
+      const [chooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 10_000 }),
+        (async () => {
+          await attachActions.waitFor({ state: "visible", timeout: 10_000 });
+          await attachActions.click();
+          await page.waitForTimeout(300);
+          await page
+            .getByRole("menuitem", { name: /upload|add.?file|attach/i })
+            .or(page.getByText("Upload", { exact: false }))
+            .first()
+            .click();
+        })(),
+      ]);
+      await chooser.setFiles(pdfPath);
+    }
   }
 
-  // Fallback: set files on any visible file input
-  if (fileInput && await fileInput.count() > 0) {
-    await fileInput.setInputFiles(pdfPath);
-    await page.waitForLoadState("networkidle", { timeout: 20_000 });
-  }
+  await page.waitForLoadState("networkidle", { timeout: 20_000 });
+  await emitScreenshot(page, emit);
 
   emit({
     report: report.id,
@@ -560,43 +728,59 @@ async function syncOneReport(
   page: Page,
   payload: IrisSyncReportPayload,
   emit: (e: SyncEvent) => void,
+  abort: { requested: boolean },
 ): Promise<void> {
   const { report, findings, pdfBase64, pdfFilename } = payload;
 
-  // Write PDF to temp file
-  const tmpDir = os.tmpdir();
-  const pdfPath = path.join(tmpDir, `iris-sync-${report.id}-${pdfFilename}`);
+  const pdfPath = path.join(
+    os.tmpdir(),
+    `iris-sync-${report.id}-${pdfFilename}`,
+  );
   fs.writeFileSync(pdfPath, Buffer.from(pdfBase64, "base64"));
 
   try {
-    await findOrCreateAsset(page, report, emit);
-    await updateComponents(page, report, emit);
-    await createRecord(page, report, findings, emit);
-    await attachPdf(page, report, pdfPath, emit);
-
+    await findOrCreateAsset(page, report, emit, abort);
+    await updateComponents(page, report, emit, abort);
+    await createRecord(page, report, findings, emit, abort);
+    await attachPdf(page, report, pdfPath, emit, abort);
     emit({ report: report.id, step: "done", status: "ok" });
   } finally {
-    // Clean up temp PDF
-    try { fs.unlinkSync(pdfPath); } catch {}
+    try {
+      fs.unlinkSync(pdfPath);
+    } catch {}
   }
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────
+
+// Keeps a reference to the running browser so the stop endpoint can kill it
+let activeBrowser: Browser | null = null;
+
+export async function DELETE() {
+  if (process.env.NODE_ENV !== "development") {
+    return new Response(null, { status: 503 });
+  }
+  if (activeBrowser) {
+    await activeBrowser.close().catch(() => {});
+    activeBrowser = null;
+  }
+  return new Response(null, { status: 204 });
+}
 
 export async function POST(req: NextRequest) {
   if (process.env.NODE_ENV !== "development") {
     return new Response(
       JSON.stringify({
         error:
-          "Iris Sync is a local-only feature. Run the app with npm run dev on your local machine.",
+          "Iris Sync is a local-only feature. Run the app with npm run dev.",
       }),
       { status: 503, headers: { "Content-Type": "application/json" } },
     );
   }
 
   let body: {
-    irisUser?: string;
-    irisPassword?: string;
+    irisCustomer?: string;
+    irisSite?: string;
     reports?: IrisSyncReportPayload[];
   };
   try {
@@ -608,22 +792,21 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const { irisUser, irisPassword, reports } = body;
+  const { irisCustomer = "", irisSite = "", reports } = body;
 
-  if (!irisUser || !irisPassword) {
-    return new Response(
-      JSON.stringify({ error: "Missing irisUser or irisPassword" }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
-    );
-  }
-  if (!Array.isArray(reports) || reports.length === 0) {
+  if (!Array.isArray(reports) || reports.length === 0)
     return new Response(JSON.stringify({ error: "No reports to sync" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
-  }
 
   const encoder = new TextEncoder();
+  const abort = { requested: false };
+
+  // Kill on client disconnect
+  req.signal.addEventListener("abort", () => {
+    abort.requested = true;
+  });
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -633,10 +816,8 @@ export async function POST(req: NextRequest) {
         } catch {}
       }
 
-      const browser = await chromium.launch({
-        headless: false, // Tech can watch it run
-        slowMo: 200,    // Slight delay so pages don't mis-fire
-      });
+      const browser = await chromium.launch({ headless: false, slowMo: 150 });
+      activeBrowser = browser;
 
       let synced = 0;
       let skipped = 0;
@@ -645,7 +826,6 @@ export async function POST(req: NextRequest) {
         const page = await browser.newPage();
         page.setDefaultTimeout(30_000);
 
-        // Login once for the whole batch
         emit({
           report: "system",
           step: "asset_find",
@@ -654,7 +834,8 @@ export async function POST(req: NextRequest) {
         });
 
         try {
-          await login(page, irisUser, irisPassword);
+          await login(page, emit);
+          await selectSite(page, irisCustomer, irisSite, emit);
         } catch (err) {
           emit({
             report: "system",
@@ -673,10 +854,18 @@ export async function POST(req: NextRequest) {
           message: `Logged in. Processing ${reports.length} report(s)…`,
         });
 
-        // Process each report
         for (const payload of reports) {
+          if (abort.requested) {
+            emit({
+              report: "system",
+              step: "error",
+              status: "info",
+              message: "Sync stopped by user.",
+            });
+            break;
+          }
           try {
-            await syncOneReport(page, payload, emit);
+            await syncOneReport(page, payload, emit, abort);
             synced++;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -684,7 +873,6 @@ export async function POST(req: NextRequest) {
               (err as { errorType?: string }).errorType === "ABORT_BATCH"
                 ? "ABORT_BATCH"
                 : "SKIP_REPORT";
-
             emit({
               report: payload.report.id,
               step: "error",
@@ -692,26 +880,29 @@ export async function POST(req: NextRequest) {
               message: msg,
               errorType,
             });
-
             if (errorType === "ABORT_BATCH") break;
             skipped++;
           }
         }
       } finally {
-        await browser.close();
-
+        await browser.close().catch(() => {});
+        activeBrowser = null;
         emit({
           report: "system",
           step: "done",
           status: "ok",
-          message: `Batch complete.`,
+          message: "Batch complete.",
           synced,
           skipped,
           total: reports.length,
         });
-
         controller.close();
       }
+    },
+
+    cancel() {
+      // Stream cancelled by client — stop Playwright
+      abort.requested = true;
     },
   });
 

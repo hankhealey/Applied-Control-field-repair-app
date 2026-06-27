@@ -266,8 +266,8 @@ export default function Sidebar() {
   const pathname = usePathname();
   const isImport = pathname.startsWith("/import");
   const isSites = pathname.startsWith("/sites");
-  const isIrisSync = pathname.startsWith("/iris-sync");
-  const isHome = !isImport && !isSites && !isIrisSync;
+  const isIrisImport = pathname.startsWith("/iris-import");
+  const isHome = !isImport && !isSites && !isIrisImport;
 
   const [open, setOpen] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -309,11 +309,11 @@ export default function Sidebar() {
             <SitesIcon active={isSites} />
           </AppItem>
           <AppItem
-            label="Iris Sync"
-            active={isIrisSync}
-            onClick={() => router.push("/iris-sync")}
+            label="Iris Import"
+            active={isIrisImport}
+            onClick={() => router.push("/iris-import")}
           >
-            <IrisSyncIcon active={isIrisSync} />
+            <IrisSyncIcon active={isIrisImport} />
           </AppItem>
           <AppItem label="Orders" disabled>
             <PlaceholderIcon />

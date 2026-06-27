@@ -336,6 +336,22 @@ function photoPages(r: RepairReport, photos: RepairPhoto[]) {
 
 const STYLES = `
   @page { size: letter; margin: 0.4in; }
+
+  /* html2canvas 1.x can't parse oklch()/lab() — Tailwind v4 uses these in its
+     preflight reset (border-color, outline-color, etc.).  Force safe hex values
+     on every element so getComputedStyle() never returns an unsupported color. */
+  *, *::before, *::after {
+    border-top-color: #999999 !important;
+    border-right-color: #999999 !important;
+    border-bottom-color: #999999 !important;
+    border-left-color: #999999 !important;
+    outline-color: transparent !important;
+    text-decoration-color: #111111 !important;
+    caret-color: #111111 !important;
+    column-rule-color: #999999 !important;
+    -webkit-tap-highlight-color: transparent !important;
+  }
+
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #111; margin: 0; }
   .sheet { page-break-after: always; padding-bottom: 10px; }
@@ -481,6 +497,7 @@ async function renderSectionsToPdfBlob(sections: string[]): Promise<Blob> {
   const { default: html2canvas } = await import("html2canvas");
 
   const styleEl = document.createElement("style");
+  styleEl.setAttribute("data-pdf-styles", "true");
   styleEl.textContent = STYLES;
   document.head.appendChild(styleEl);
 

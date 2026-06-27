@@ -15,6 +15,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No audio" }, { status: 400 });
   }
 
+  const MAX_BYTES = 25 * 1024 * 1024; // 25 MB — Groq Whisper limit
+  if (audio.size > MAX_BYTES) {
+    return NextResponse.json({ error: "Audio file too large (max 25 MB)" }, { status: 413 });
+  }
+
   const form = new FormData();
   form.append("file", audio);
   form.append("model", "whisper-large-v3-turbo");

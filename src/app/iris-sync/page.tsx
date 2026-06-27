@@ -2,7 +2,10 @@
 
 import { useLiveQuery } from "dexie-react-hooks";
 import { useEffect, useRef, useState } from "react";
-import type { IrisSyncReportPayload, SyncEvent } from "@/app/api/iris/sync/route";
+import type {
+  IrisSyncReportPayload,
+  SyncEvent,
+} from "@/app/api/iris/sync/route";
 import Header from "@/components/Header";
 import db from "@/lib/db";
 import { buildRepairPdfBlob } from "@/lib/exports/pdf";
@@ -49,8 +52,15 @@ function statusColor(status: SyncEvent["status"]) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function IrisSyncPage() {
-  const isLocal =
-    typeof window === "undefined" || window.location.hostname === "localhost";
+  // Must NOT read window during SSR — defer to useEffect to avoid hydration
+  // mismatch between server (always undefined) and client (may be Vercel).
+  const [isLocal, setIsLocal] = useState(true);
+  useEffect(() => {
+    setIsLocal(
+      window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1",
+    );
+  }, []);
 
   // Dexie data
   const allReports = useLiveQuery(
@@ -58,10 +68,9 @@ export default function IrisSyncPage() {
     [],
   );
 
-  // Credentials
-  const [irisUser, setIrisUser] = useState("");
-  const [irisPassword, setIrisPassword] = useState("");
-  const [showPass, setShowPass] = useState(false);
+  // Site selection
+  const [irisCustomer, setIrisCustomer] = useState("");
+  const [irisSite, setIrisSite] = useState("");
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -80,6 +89,10 @@ export default function IrisSyncPage() {
   } | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef(false);
+
+  // Live screenshot preview
+  const [liveScreenshot, setLiveScreenshot] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(true);
 
   // Auto-scroll log when entries are added
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally fires on log change
@@ -122,25 +135,38 @@ export default function IrisSyncPage() {
     (r) => selectedIds.has(r.id) && (!r.irisSyncedAt || resyncIds.has(r.id)),
   );
 
+  // ── Emergency stop ─────────────────────────────────────────────────────────
+
+  async function emergencyStop() {
+    abortRef.current = true;
+    // Kill the Playwright browser immediately via DELETE endpoint
+    try {
+      await fetch("/api/iris/sync", { method: "DELETE" });
+    } catch {}
+    setSyncState("aborted");
+  }
+
   // ── Run sync ───────────────────────────────────────────────────────────────
 
   async function runSync() {
-    if (!irisUser || !irisPassword) return;
     if (readyToSync.length === 0) return;
 
     setLog([]);
     setSummary(null);
+    setLiveScreenshot(null);
     setSyncState("running");
     abortRef.current = false;
 
     // ── Build full payload: findings + PDF for each report ──────────────────
-    setLog([{
-      report: "system",
-      step: "asset_find",
-      status: "info",
-      message: `Generating PDFs for ${readyToSync.length} report(s)…`,
-      ts: new Date().toISOString(),
-    }]);
+    setLog([
+      {
+        report: "system",
+        step: "asset_find",
+        status: "info",
+        message: `Generating PDFs for ${readyToSync.length} report(s)…`,
+        ts: new Date().toISOString(),
+      },
+    ]);
 
     let reportsPayload: IrisSyncReportPayload[];
     try {
@@ -153,21 +179,28 @@ export default function IrisSyncPage() {
 
           const { blob, filename } = await buildRepairPdfBlob(report.id);
           const arrayBuffer = await blob.arrayBuffer();
-          const pdfBase64 = btoa(
-            String.fromCharCode(...new Uint8Array(arrayBuffer)),
-          );
+          // btoa(String.fromCharCode(...array)) overflows the call stack for
+          // large PDFs — spread has a ~125k arg limit in V8. Chunk instead.
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 8192) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+          }
+          const pdfBase64 = btoa(binary);
 
           return { report, findings, pdfBase64, pdfFilename: filename };
         }),
       );
     } catch (err) {
-      setLog([{
-        report: "system",
-        step: "error",
-        status: "error",
-        message: `PDF generation failed: ${err instanceof Error ? err.message : String(err)}`,
-        ts: new Date().toISOString(),
-      }]);
+      setLog([
+        {
+          report: "system",
+          step: "error",
+          status: "error",
+          message: `PDF generation failed: ${err instanceof Error ? err.message : String(err)}`,
+          ts: new Date().toISOString(),
+        },
+      ]);
       setSyncState("aborted");
       return;
     }
@@ -178,8 +211,8 @@ export default function IrisSyncPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          irisUser,
-          irisPassword,
+          irisCustomer,
+          irisSite,
           reports: reportsPayload,
         }),
       });
@@ -216,6 +249,7 @@ export default function IrisSyncPage() {
       return;
     }
 
+    // biome-ignore lint/style/noNonNullAssertion: POST to our own route always has a body
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -237,6 +271,14 @@ export default function IrisSyncPage() {
         if (!line.startsWith("data: ")) continue;
         try {
           const event: SyncEvent = JSON.parse(line.slice(6));
+
+          // Update live screenshot if present
+          if (event.screenshot) {
+            setLiveScreenshot(event.screenshot);
+            // Don't add screenshot events to the log
+            continue;
+          }
+
           const entry: LogEntry = { ...event, ts: new Date().toISOString() };
           setLog((prev) => [...prev, entry]);
 
@@ -276,6 +318,7 @@ export default function IrisSyncPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const isRunning = syncState === "running";
+  const canRun = isLocal && readyToSync.length > 0;
 
   return (
     <div
@@ -317,7 +360,7 @@ export default function IrisSyncPage() {
             </div>
           )}
 
-          {/* Credentials */}
+          {/* Site selection */}
           <section
             className="rounded-xl border p-5 space-y-4"
             style={{
@@ -325,27 +368,38 @@ export default function IrisSyncPage() {
               background: "var(--bg-card)",
             }}
           >
-            <h2
-              className="text-sm font-semibold tracking-wide"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              IRIS CREDENTIALS
-            </h2>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Credentials are used only for this session and are never saved.
-            </p>
+            <div>
+              <h2
+                className="text-sm font-semibold tracking-wide"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                IRIS SITE
+              </h2>
+              <p
+                className="text-xs mt-1"
+                style={{ color: "var(--text-muted)" }}
+              >
+                When sync starts, a browser window will open and ask you to log
+                in to Iris — you have 2 minutes to complete it.
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <label
+                  htmlFor="iris-customer"
                   className="text-xs font-medium"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  Username
+                  Customer{" "}
+                  <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                    (optional)
+                  </span>
                 </label>
                 <input
+                  id="iris-customer"
                   type="text"
-                  value={irisUser}
-                  onChange={(e) => setIrisUser(e.target.value)}
+                  value={irisCustomer}
+                  onChange={(e) => setIrisCustomer(e.target.value)}
                   disabled={isRunning}
                   autoComplete="off"
                   className="w-full rounded-lg px-3 py-2 text-sm outline-none"
@@ -354,40 +408,35 @@ export default function IrisSyncPage() {
                     border: "1px solid var(--border)",
                     color: "var(--text-primary)",
                   }}
-                  placeholder="Iris username"
+                  placeholder="e.g. Acme Corp"
                 />
               </div>
               <div className="space-y-1">
                 <label
+                  htmlFor="iris-site"
                   className="text-xs font-medium"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  Password
+                  Site{" "}
+                  <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                    (optional)
+                  </span>
                 </label>
-                <div className="relative">
-                  <input
-                    type={showPass ? "text" : "password"}
-                    value={irisPassword}
-                    onChange={(e) => setIrisPassword(e.target.value)}
-                    disabled={isRunning}
-                    autoComplete="current-password"
-                    className="w-full rounded-lg px-3 py-2 pr-10 text-sm outline-none"
-                    style={{
-                      background: "var(--bg-input)",
-                      border: "1px solid var(--border)",
-                      color: "var(--text-primary)",
-                    }}
-                    placeholder="Iris password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-xs"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {showPass ? "Hide" : "Show"}
-                  </button>
-                </div>
+                <input
+                  id="iris-site"
+                  type="text"
+                  value={irisSite}
+                  onChange={(e) => setIrisSite(e.target.value)}
+                  disabled={isRunning}
+                  autoComplete="off"
+                  className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                  style={{
+                    background: "var(--bg-input)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
+                  placeholder="e.g. Refinery North"
+                />
               </div>
             </div>
           </section>
@@ -535,44 +584,17 @@ export default function IrisSyncPage() {
             </div>
           )}
 
-          {/* Push button */}
+          {/* Push button + emergency stop */}
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={runSync}
-              disabled={
-                isRunning ||
-                !isLocal ||
-                !irisUser ||
-                !irisPassword ||
-                readyToSync.length === 0
-              }
+              disabled={isRunning || !canRun}
               className="rounded-xl px-6 py-3 text-sm font-semibold transition-all"
               style={{
-                background:
-                  isRunning ||
-                  !isLocal ||
-                  !irisUser ||
-                  !irisPassword ||
-                  readyToSync.length === 0
-                    ? "#1F2937"
-                    : "#1D4ED8",
-                color:
-                  isRunning ||
-                  !isLocal ||
-                  !irisUser ||
-                  !irisPassword ||
-                  readyToSync.length === 0
-                    ? "#4B5563"
-                    : "#fff",
-                cursor:
-                  isRunning ||
-                  !isLocal ||
-                  !irisUser ||
-                  !irisPassword ||
-                  readyToSync.length === 0
-                    ? "not-allowed"
-                    : "pointer",
+                background: isRunning || !canRun ? "#1F2937" : "#1D4ED8",
+                color: isRunning || !canRun ? "#4B5563" : "#fff",
+                cursor: isRunning || !canRun ? "not-allowed" : "pointer",
               }}
             >
               {isRunning
@@ -583,13 +605,25 @@ export default function IrisSyncPage() {
             {isRunning && (
               <button
                 type="button"
-                onClick={() => {
-                  abortRef.current = true;
+                onClick={emergencyStop}
+                className="rounded-xl px-5 py-3 text-sm font-semibold flex items-center gap-2 transition-all"
+                style={{
+                  background: "#7F1D1D",
+                  color: "#FCA5A5",
+                  border: "1px solid #991B1B",
                 }}
-                className="rounded-xl px-4 py-3 text-sm font-medium"
-                style={{ background: "#450A0A", color: "#F87171" }}
               >
-                Stop
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <rect
+                    x="2"
+                    y="2"
+                    width="10"
+                    height="10"
+                    rx="1"
+                    fill="#FCA5A5"
+                  />
+                </svg>
+                Emergency Stop
               </button>
             )}
 
@@ -600,6 +634,7 @@ export default function IrisSyncPage() {
                   setSyncState("idle");
                   setLog([]);
                   setSummary(null);
+                  setLiveScreenshot(null);
                   setSelectedIds(new Set());
                   setResyncIds(new Set());
                 }}
@@ -636,6 +671,71 @@ export default function IrisSyncPage() {
                 </p>
               )}
             </div>
+          )}
+
+          {/* Live browser preview */}
+          {(isRunning || liveScreenshot) && (
+            <section
+              className="rounded-xl border overflow-hidden"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--bg-card)",
+              }}
+            >
+              <div
+                className="flex items-center justify-between px-4 py-2.5"
+                style={{ borderBottom: "1px solid var(--border)" }}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className="h-2 w-2 rounded-full"
+                    style={{
+                      background: isRunning ? "#4ADE80" : "#374151",
+                      boxShadow: isRunning ? "0 0 6px #4ADE80" : "none",
+                      animation: isRunning ? "pulse 1.5s infinite" : "none",
+                    }}
+                  />
+                  <span
+                    className="text-xs font-semibold tracking-wide"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    LIVE BROWSER PREVIEW
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPreview((v) => !v)}
+                  className="text-xs"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {showPreview ? "Hide" : "Show"}
+                </button>
+              </div>
+              {showPreview && (
+                <div className="p-3" style={{ background: "#0D1117" }}>
+                  {liveScreenshot && (
+                    // biome-ignore lint/performance/noImgElement: base64 data URL — Next.js Image doesn't support data: URIs
+                    <img
+                      src={`data:image/jpeg;base64,${liveScreenshot}`}
+                      alt="Live Iris browser view"
+                      className="w-full rounded"
+                      style={{ imageRendering: "crisp-edges" }}
+                    />
+                  )}
+                  {!liveScreenshot && (
+                    <div
+                      className="flex h-40 items-center justify-center rounded text-xs"
+                      style={{
+                        background: "#111827",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      Waiting for first screenshot…
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
           )}
 
           {/* Live log */}
@@ -689,6 +789,9 @@ export default function IrisSyncPage() {
           )}
         </div>
       </div>
+
+      {/* Pulse animation */}
+      <style>{`@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
     </div>
   );
 }
@@ -780,6 +883,7 @@ function ReportRow({
             className="rounded px-2 py-0.5 text-xs font-medium"
             style={{ background: "#0A2010", color: "#4ADE80" }}
           >
+            {/* biome-ignore lint/style/noNonNullAssertion: isSynced guard above ensures non-null */}
             Synced {fmtDate(report.irisSyncedAt!)}
           </span>
         ) : (
