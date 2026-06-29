@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ImportEvent, ImportedAsset } from "@/app/api/iris/import/route";
 import Header from "@/components/Header";
+import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/ToastProvider";
 import db from "@/lib/db";
 import { emptyReport } from "@/lib/reportNumber";
-
-// ── Types ──────────────────────────────────────────────────────────────────────
 
 type ScanState = "idle" | "running" | "done" | "error";
 
@@ -16,66 +16,49 @@ type LogLine = {
   ts: string;
 };
 
-// ── Ollama setup instructions ──────────────────────────────────────────────────
-
 function OllamaSetup() {
   return (
     <div
       className="rounded-xl border p-6 space-y-4"
-      style={{ borderColor: "#1E40AF", background: "#0A1520" }}
+      style={{ borderColor: "var(--color-info-border)", background: "var(--color-info-bg)" }}
     >
       <div className="flex items-center gap-3">
-        <div
-          className="h-2.5 w-2.5 rounded-full"
-          style={{ background: "#F87171" }}
-        />
-        <h2 className="text-sm font-semibold" style={{ color: "#93C5FD" }}>
+        <div className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--color-danger-text)" }} />
+        <h2 className="text-sm font-semibold" style={{ color: "var(--color-info-text)" }}>
           Ollama not detected
         </h2>
       </div>
-      <p className="text-sm" style={{ color: "#6B7280" }}>
+      <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
         Iris Import uses a local AI model (via Ollama) to read and extract data
         from the Iris portal. Install Ollama to get started — it&apos;s free and
         runs entirely on your machine.
       </p>
-      <div className="space-y-2">
+      <div className="space-y-3">
         {[
-          {
-            step: "1",
-            label: "Install Ollama",
-            code: "brew install ollama",
-          },
-          {
-            step: "2",
-            label: "Start the server",
-            code: "ollama serve",
-          },
+          { step: "1", label: "Install Ollama", code: "brew install ollama" },
+          { step: "2", label: "Start the server", code: "ollama serve" },
           {
             step: "3",
             label: "Pull a model (pick one)",
             code: "ollama pull llama3.2\n# or for better accuracy:\nollama pull mistral",
           },
-          {
-            step: "4",
-            label: "Refresh this page",
-            code: null,
-          },
+          { step: "4", label: "Refresh this page", code: null },
         ].map(({ step, label, code }) => (
           <div key={step} className="flex gap-3">
             <div
-              className="h-5 w-5 rounded-full text-xs font-bold flex items-center justify-center flex-shrink-0 mt-0.5"
-              style={{ background: "#1E3A5F", color: "#60A5FA" }}
+              className="h-5 w-5 rounded-full text-xs font-bold flex items-center justify-center shrink-0 mt-0.5"
+              style={{ background: "var(--color-info-bg-strong)", color: "var(--color-info-text)" }}
             >
               {step}
             </div>
             <div className="space-y-1 flex-1">
-              <p className="text-xs font-medium" style={{ color: "#CBD5E1" }}>
+              <p className="text-xs font-medium" style={{ color: "var(--text-primary)" }}>
                 {label}
               </p>
               {code && (
                 <pre
-                  className="rounded px-3 py-2 text-xs font-mono overflow-x-auto"
-                  style={{ background: "#0D1117", color: "#A3E635" }}
+                  className="rounded-lg px-3 py-2 text-xs font-mono overflow-x-auto"
+                  style={{ background: "var(--bg-sidebar)", color: "var(--color-success-text)" }}
                 >
                   {code}
                 </pre>
@@ -84,7 +67,7 @@ function OllamaSetup() {
           </div>
         ))}
       </div>
-      <p className="text-xs" style={{ color: "#4B5563" }}>
+      <p className="text-xs" style={{ color: "var(--text-label)" }}>
         Recommended models: <code>llama3.2</code> (2 GB, fast),{" "}
         <code>mistral</code> (4 GB, more accurate)
       </p>
@@ -92,9 +75,8 @@ function OllamaSetup() {
   );
 }
 
-// ── Component ──────────────────────────────────────────────────────────────────
-
 export default function IrisImportPage() {
+  const { toast } = useToast();
   const [isLocal, setIsLocal] = useState(true);
   useEffect(() => {
     setIsLocal(
@@ -103,18 +85,15 @@ export default function IrisImportPage() {
     );
   }, []);
 
-  // Ollama status
   const [ollamaRunning, setOllamaRunning] = useState<boolean | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
 
-  // Scan state
   const [scanState, setScanState] = useState<ScanState>("idle");
   const [log, setLog] = useState<LogLine[]>([]);
   const [screenshot, setScreenshot] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
 
-  // Results
   const [assets, setAssets] = useState<ImportedAsset[]>([]);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
@@ -123,13 +102,10 @@ export default function IrisImportPage() {
   const logRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef(false);
 
-  // Auto-scroll log
   // biome-ignore lint/correctness/useExhaustiveDependencies: fires on log change
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [log]);
-
-  // ── Check Ollama on mount ──────────────────────────────────────────────────
 
   useEffect(() => {
     fetch("/api/iris/import")
@@ -141,8 +117,6 @@ export default function IrisImportPage() {
       })
       .catch(() => setOllamaRunning(false));
   }, []);
-
-  // ── Scan ──────────────────────────────────────────────────────────────────
 
   async function startScan() {
     if (!selectedModel) return;
@@ -163,13 +137,7 @@ export default function IrisImportPage() {
       });
     } catch (err) {
       setScanState("error");
-      setLog([
-        {
-          level: "error",
-          message: `Network error: ${err instanceof Error ? err.message : String(err)}`,
-          ts: new Date().toISOString(),
-        },
-      ]);
+      setLog([{ level: "error", message: `Network error: ${err instanceof Error ? err.message : String(err)}`, ts: new Date().toISOString() }]);
       return;
     }
 
@@ -202,46 +170,22 @@ export default function IrisImportPage() {
         if (!line.startsWith("data: ")) continue;
         try {
           const event = JSON.parse(line.slice(6)) as ImportEvent;
-
-          if (event.kind === "screenshot") {
-            setScreenshot(event.data);
-            continue;
-          }
-
+          if (event.kind === "screenshot") { setScreenshot(event.data); continue; }
           if (event.kind === "log") {
-            setLog((p) => [
-              ...p,
-              {
-                level: event.level,
-                message: event.message,
-                ts: new Date().toISOString(),
-              },
-            ]);
+            setLog((p) => [...p, { level: event.level, message: event.message, ts: new Date().toISOString() }]);
             continue;
           }
-
           if (event.kind === "assets") {
             setAssets(event.assets);
             setSelectedTags(new Set(event.assets.map((a) => a.tag)));
             continue;
           }
-
           if (event.kind === "error") {
-            setLog((p) => [
-              ...p,
-              {
-                level: "error",
-                message: event.message,
-                ts: new Date().toISOString(),
-              },
-            ]);
+            setLog((p) => [...p, { level: "error", message: event.message, ts: new Date().toISOString() }]);
             setScanState("error");
             continue;
           }
-
-          if (event.kind === "done") {
-            setScanState("done");
-          }
+          if (event.kind === "done") setScanState("done");
         } catch {}
       }
     }
@@ -249,21 +193,14 @@ export default function IrisImportPage() {
     setScanState((s) => (s === "running" ? "done" : s));
   }
 
-  // ── Import selected assets into Dexie ─────────────────────────────────────
-
   async function importSelected() {
     const toImport = assets.filter((a) => selectedTags.has(a.tag));
     if (toImport.length === 0) return;
-
     setImporting(true);
     let count = 0;
-
     for (const asset of toImport) {
       const id = crypto.randomUUID();
-      // Generate a simple report number based on tag
-      const reportNumber = `IMP-${asset.tag}`;
-      const report = emptyReport(id, reportNumber);
-
+      const report = emptyReport(id, `IMP-${asset.tag}`);
       await db.reports.add({
         ...report,
         tagOrUnit: asset.tag,
@@ -277,44 +214,30 @@ export default function IrisImportPage() {
         positionerModelAction: asset.components?.positioner?.model ?? "",
         positionerSerialNumber: asset.components?.positioner?.serial ?? "",
       });
-
       count++;
       setImported(count);
     }
-
     setImporting(false);
+    toast(`Imported ${count} asset${count !== 1 ? "s" : ""} as draft reports`, "success");
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
   const isRunning = scanState === "running";
-  const canScan =
-    isLocal && ollamaRunning === true && !!selectedModel && !isRunning;
+  const canScan = isLocal && ollamaRunning === true && !!selectedModel && !isRunning;
   const readyToImport = assets.filter((a) => selectedTags.has(a.tag));
 
   return (
-    <div
-      className="flex min-h-screen flex-col"
-      style={{ background: "var(--bg-base)" }}
-    >
+    <div className="flex min-h-screen flex-col" style={{ background: "var(--bg-main)" }}>
       <Header />
 
-      <div className="flex-1 overflow-auto p-6">
-        <div className="mx-auto max-w-3xl space-y-6">
+      <div className="flex-1 overflow-auto">
+        <main className="mx-auto max-w-3xl px-3 py-5 sm:px-6 sm:py-6 space-y-5">
           {/* Title */}
           <div>
-            <h1
-              className="text-lg font-bold"
-              style={{ color: "var(--text-primary)" }}
-            >
+            <h1 className="text-lg font-bold" style={{ color: "var(--text-primary)" }}>
               Iris Import
             </h1>
-            <p
-              className="text-sm mt-0.5"
-              style={{ color: "var(--text-muted)" }}
-            >
-              Scan Iris assets using a local AI model and import them as
-              reports.
+            <p className="text-sm mt-0.5" style={{ color: "var(--text-secondary)" }}>
+              Scan Iris assets using a local AI model and import them as reports.
             </p>
           </div>
 
@@ -323,20 +246,20 @@ export default function IrisImportPage() {
             <div
               className="rounded-xl border px-4 py-3 text-sm"
               style={{
-                background: "#1A0A00",
-                borderColor: "#92400E",
-                color: "#FCD34D",
+                background: "var(--color-warning-bg)",
+                borderColor: "var(--color-warning-border)",
+                color: "var(--color-warning-text)",
               }}
             >
-              ⚠️ Iris Import only works locally (<code>npm run dev</code>).
+              Iris Import only works locally (<code>npm run dev</code>).
             </div>
           )}
 
           {/* Ollama status */}
           {ollamaRunning === null && (
-            <div className="text-sm" style={{ color: "var(--text-muted)" }}>
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
               Checking Ollama…
-            </div>
+            </p>
           )}
 
           {ollamaRunning === false && <OllamaSetup />}
@@ -346,30 +269,16 @@ export default function IrisImportPage() {
               {/* Model selector */}
               <section
                 className="rounded-xl border p-5 space-y-3"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--bg-card)",
-                }}
+                style={{ borderColor: "var(--border)", background: "var(--bg-card)" }}
               >
                 <div className="flex items-center gap-2">
-                  <div
-                    className="h-2 w-2 rounded-full"
-                    style={{ background: "#4ADE80" }}
-                  />
-                  <h2
-                    className="text-sm font-semibold tracking-wide"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
+                  <div className="h-2 w-2 rounded-full" style={{ background: "var(--color-success-text)" }} />
+                  <h2 className="text-xs font-semibold tracking-wider" style={{ color: "var(--text-secondary)" }}>
                     OLLAMA CONNECTED
                   </h2>
                 </div>
-
-                <div className="space-y-1">
-                  <label
-                    htmlFor="model-select"
-                    className="text-xs font-medium"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
+                <div className="space-y-1.5">
+                  <label htmlFor="model-select" className="label-sm block">
                     Model
                   </label>
                   <select
@@ -377,62 +286,41 @@ export default function IrisImportPage() {
                     value={selectedModel}
                     onChange={(e) => setSelectedModel(e.target.value)}
                     disabled={isRunning}
-                    className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                    style={{
-                      background: "var(--bg-input)",
-                      border: "1px solid var(--border)",
-                      color: "var(--text-primary)",
-                    }}
+                    className="input"
                   >
                     {models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
+                      <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                  <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  <p className="text-xs" style={{ color: "var(--text-label)" }}>
                     Larger models give more accurate extraction.{" "}
                     <code>mistral</code> or <code>llama3.2</code> recommended.
                   </p>
                 </div>
               </section>
 
-              {/* Scan button */}
+              {/* Scan controls */}
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
+                <Button
+                  variant="primary"
                   onClick={startScan}
                   disabled={!canScan}
-                  className="rounded-xl px-6 py-3 text-sm font-semibold transition-all"
-                  style={{
-                    background: canScan ? "#1D4ED8" : "#1F2937",
-                    color: canScan ? "#fff" : "#4B5563",
-                    cursor: canScan ? "pointer" : "not-allowed",
-                  }}
+                  loading={isRunning}
                 >
                   {isRunning ? "Scanning Iris…" : "Scan Iris →"}
-                </button>
+                </Button>
 
                 {isRunning && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      abortRef.current = true;
-                      setScanState("idle");
-                    }}
-                    className="rounded-xl px-5 py-3 text-sm font-semibold"
-                    style={{
-                      background: "#7F1D1D",
-                      color: "#FCA5A5",
-                      border: "1px solid #991B1B",
-                    }}
+                  <Button
+                    variant="danger"
+                    onClick={() => { abortRef.current = true; setScanState("idle"); }}
                   >
                     Stop
-                  </button>
+                  </Button>
                 )}
 
                 {scanState === "done" && assets.length === 0 && (
-                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                  <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
                     No assets found — try a different model or check the log.
                   </p>
                 )}
@@ -442,10 +330,7 @@ export default function IrisImportPage() {
               {(isRunning || screenshot) && (
                 <section
                   className="rounded-xl border overflow-hidden"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--bg-card)",
-                  }}
+                  style={{ borderColor: "var(--border)", background: "var(--bg-card)" }}
                 >
                   <div
                     className="flex items-center justify-between px-4 py-2.5"
@@ -455,29 +340,21 @@ export default function IrisImportPage() {
                       <div
                         className="h-2 w-2 rounded-full"
                         style={{
-                          background: isRunning ? "#4ADE80" : "#374151",
-                          boxShadow: isRunning ? "0 0 6px #4ADE80" : "none",
-                          animation: isRunning ? "pulse 1.5s infinite" : "none",
+                          background: isRunning ? "var(--color-success-text)" : "var(--text-label)",
+                          boxShadow: isRunning ? "0 0 6px var(--color-success-text)" : "none",
+                          animation: isRunning ? "iris-pulse 1.5s infinite" : "none",
                         }}
                       />
-                      <span
-                        className="text-xs font-semibold tracking-wide"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
+                      <span className="text-xs font-semibold tracking-wider" style={{ color: "var(--text-secondary)" }}>
                         LIVE BROWSER
                       </span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowPreview((v) => !v)}
-                      className="text-xs"
-                      style={{ color: "var(--text-muted)" }}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => setShowPreview((v) => !v)}>
                       {showPreview ? "Hide" : "Show"}
-                    </button>
+                    </Button>
                   </div>
                   {showPreview && (
-                    <div className="p-3" style={{ background: "#0D1117" }}>
+                    <div className="p-3" style={{ background: "var(--bg-sidebar)" }}>
                       {screenshot ? (
                         // biome-ignore lint/performance/noImgElement: base64 data URL
                         <img
@@ -489,10 +366,7 @@ export default function IrisImportPage() {
                       ) : (
                         <div
                           className="flex h-40 items-center justify-center rounded text-xs"
-                          style={{
-                            background: "#111827",
-                            color: "var(--text-muted)",
-                          }}
+                          style={{ background: "var(--bg-main)", color: "var(--text-label)" }}
                         >
                           Waiting for first screenshot…
                         </div>
@@ -506,43 +380,31 @@ export default function IrisImportPage() {
               {log.length > 0 && (
                 <section
                   className="rounded-xl border p-4"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--bg-card)",
-                  }}
+                  style={{ borderColor: "var(--border)", background: "var(--bg-card)" }}
                 >
-                  <h2
-                    className="text-xs font-semibold tracking-wide mb-3"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
+                  <h2 className="text-xs font-semibold tracking-wider mb-3" style={{ color: "var(--text-secondary)" }}>
                     SCAN LOG
                   </h2>
-                  <div
-                    ref={logRef}
-                    className="space-y-1 max-h-52 overflow-y-auto font-mono text-xs"
-                  >
+                  <div ref={logRef} className="space-y-1 max-h-52 overflow-y-auto font-mono text-xs">
                     {log.map((line, i) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: append-only
                       <div key={i} className="flex items-start gap-3">
-                        <span style={{ color: "#374151", flexShrink: 0 }}>
+                        <span style={{ color: "var(--text-label)", flexShrink: 0 }}>
                           {new Date(line.ts).toLocaleTimeString()}
                         </span>
                         <span
                           style={{
-                            color:
-                              line.level === "error"
-                                ? "#F87171"
-                                : line.level === "warn"
-                                  ? "#FCD34D"
-                                  : "#93C5FD",
+                            color: line.level === "error"
+                              ? "var(--color-danger-text)"
+                              : line.level === "warn"
+                                ? "var(--color-warning-text)"
+                                : "var(--color-info-text)",
                             flexShrink: 0,
                           }}
                         >
                           {line.level}
                         </span>
-                        <span style={{ color: "var(--text-muted)" }}>
-                          {line.message}
-                        </span>
+                        <span style={{ color: "var(--text-secondary)" }}>{line.message}</span>
                       </div>
                     ))}
                   </div>
@@ -553,41 +415,31 @@ export default function IrisImportPage() {
               {assets.length > 0 && (
                 <section
                   className="rounded-xl border p-5 space-y-4"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--bg-card)",
-                  }}
+                  style={{ borderColor: "var(--border)", background: "var(--bg-card)" }}
                 >
                   <div className="flex items-center justify-between">
-                    <h2
-                      className="text-sm font-semibold tracking-wide"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      DISCOVERED ASSETS ({assets.length})
+                    <h2 className="label-sm">
+                      Discovered Assets ({assets.length})
                     </h2>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSelectedTags(new Set(assets.map((a) => a.tag)))
-                        }
-                        className="text-xs px-2 py-1 rounded"
-                        style={{ color: "#60A5FA" }}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedTags(new Set(assets.map((a) => a.tag)))}
                       >
                         Select all
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={() => setSelectedTags(new Set())}
-                        className="text-xs px-2 py-1 rounded"
-                        style={{ color: "var(--text-muted)" }}
                       >
                         Clear
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
-                  <div className="rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+                  <div className="rounded-lg overflow-hidden max-h-80 overflow-y-auto border" style={{ borderColor: "var(--border)" }}>
                     {assets.map((asset) => {
                       const checked = selectedTags.has(asset.tag);
                       return (
@@ -597,9 +449,7 @@ export default function IrisImportPage() {
                           key={asset.tag}
                           className="flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors"
                           style={{
-                            background: checked
-                              ? "rgba(29,78,216,0.08)"
-                              : "transparent",
+                            background: checked ? "rgba(var(--accent-rgb, 29,78,216),0.08)" : "transparent",
                             borderBottom: "1px solid var(--border)",
                           }}
                           onClick={() =>
@@ -612,42 +462,25 @@ export default function IrisImportPage() {
                           }
                         >
                           <div
-                            className="h-4 w-4 rounded flex items-center justify-center flex-shrink-0"
+                            className="h-4 w-4 rounded flex items-center justify-center shrink-0"
                             style={{
-                              background: checked ? "#1D4ED8" : "transparent",
-                              border: checked ? "none" : "1.5px solid #374151",
+                              background: checked ? "var(--accent)" : "transparent",
+                              border: checked ? "none" : "1.5px solid var(--border-solid)",
                             }}
                           >
                             {checked && (
-                              <svg
-                                width="10"
-                                height="8"
-                                viewBox="0 0 10 8"
-                                fill="none"
-                              >
-                                <path
-                                  d="M1 4l3 3 5-6"
-                                  stroke="#fff"
-                                  strokeWidth="1.5"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
+                              <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+                                <path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                               </svg>
                             )}
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span
-                                className="text-sm font-medium font-mono"
-                                style={{ color: "var(--text-primary)" }}
-                              >
+                              <span className="text-sm font-medium font-mono" style={{ color: "var(--text-primary)" }}>
                                 {asset.tag}
                               </span>
                               {asset.type && (
-                                <span
-                                  className="text-xs"
-                                  style={{ color: "var(--text-muted)" }}
-                                >
+                                <span className="text-xs" style={{ color: "var(--text-label)" }}>
                                   {asset.type}
                                 </span>
                               )}
@@ -658,49 +491,34 @@ export default function IrisImportPage() {
                     })}
                   </div>
 
-                  {/* Import button */}
                   {imported > 0 ? (
                     <div
                       className="rounded-lg px-4 py-3 text-sm font-medium"
-                      style={{ background: "#0A2010", color: "#4ADE80" }}
+                      style={{ background: "var(--color-success-bg)", color: "var(--color-success-text)" }}
                     >
-                      ✓ Imported {imported} asset{imported !== 1 ? "s" : ""} as
-                      draft reports. Open Reports to continue.
+                      ✓ Imported {imported} asset{imported !== 1 ? "s" : ""} as draft reports. Open Reports to continue.
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={importSelected}
+                    <Button
+                      variant="primary"
+                      className="w-full justify-center"
+                      loading={importing}
                       disabled={importing || readyToImport.length === 0}
-                      className="rounded-xl px-6 py-3 text-sm font-semibold w-full transition-all"
-                      style={{
-                        background:
-                          importing || readyToImport.length === 0
-                            ? "#1F2937"
-                            : "#059669",
-                        color:
-                          importing || readyToImport.length === 0
-                            ? "#4B5563"
-                            : "#fff",
-                        cursor:
-                          importing || readyToImport.length === 0
-                            ? "not-allowed"
-                            : "pointer",
-                      }}
+                      onClick={importSelected}
                     >
                       {importing
                         ? "Importing…"
                         : `Import ${readyToImport.length} asset${readyToImport.length !== 1 ? "s" : ""} as draft reports →`}
-                    </button>
+                    </Button>
                   )}
                 </section>
               )}
             </>
           )}
-        </div>
+        </main>
       </div>
 
-      <style>{`@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+      <style>{`@keyframes iris-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
     </div>
   );
 }

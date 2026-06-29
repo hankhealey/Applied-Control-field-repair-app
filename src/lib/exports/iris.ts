@@ -516,6 +516,42 @@ export async function exportIrisCsvMulti(reportIds: string[]): Promise<void> {
   triggerDownload(filename, buildCsv(valid));
 }
 
+// Normalize any common date string to YYYY-MM-DD; returns original if unrecognized.
+function toIsoDate(s: string): string {
+  if (!s) return "";
+  const t = s.trim();
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  // MM/DD/YYYY or M/D/YYYY
+  const mdy = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, "0")}-${mdy[2].padStart(2, "0")}`;
+  // MM-DD-YYYY (not ISO, American with dashes)
+  const mdyDash = t.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (mdyDash) return `${mdyDash[3]}-${mdyDash[1]}-${mdyDash[2]}`;
+  // "January 15, 2024" or "Jan 15, 2024"
+  const longMonth: Record<string, string> = {
+    january:"01",february:"02",march:"03",april:"04",may:"05",june:"06",
+    july:"07",august:"08",september:"09",october:"10",november:"11",december:"12",
+    jan:"01",feb:"02",mar:"03",apr:"04",jun:"06",jul:"07",aug:"08",
+    sep:"09",oct:"10",nov:"11",dec:"12",
+  };
+  const named = t.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (named) {
+    const m = longMonth[named[1].toLowerCase()];
+    if (m) return `${named[3]}-${m}-${named[2].padStart(2, "0")}`;
+  }
+  // "15-Jan-2024"
+  const dmy = t.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (dmy) {
+    const m = longMonth[dmy[2].toLowerCase()];
+    if (m) return `${dmy[3]}-${m}-${dmy[1].padStart(2, "0")}`;
+  }
+  // Last resort: browser Date.parse (timezone-agnostic for date-only strings)
+  const parsed = Date.parse(t);
+  if (!isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  return t;
+}
+
 // ── Records CSV (79-column template) ─────────────────────────────────────────
 
 const RECORD_HEADERS = [
@@ -577,30 +613,57 @@ const RECORD_HEADERS = [
   "\tRecommendation 5 Title", "\tRecommendation 5 Status", "\tRecommendation 5 Content",
 ]; // 79 columns
 
-function buildObservationsText(p: ParsedPdfReport): string {
-  const lines: string[] = [];
+// IRIS Observations field renders HTML. Build the HTML content for that field.
+// Section headers use <strong>, each line is a <p>, blank spacers are <p><br></p>.
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
-  if (p.scopeOfWork) {
-    lines.push("Scope of Work");
-    lines.push(p.scopeOfWork);
-    lines.push("");
+export function buildObservationsHtml(p: ParsedPdfReport): string {
+  // AI-generated HTML takes priority — it contains full per-component findings
+  if (p.observationsHtml?.trim()) return p.observationsHtml;
+
+  // Fallback: build structured HTML from available fields
+  const chunks: string[] = [];
+
+  // ── Observations & Findings ─────────────────────────────────────────────────
+  const findingLines: string[] = [];
+  if (p.scopeOfWork) findingLines.push(`Scope of Work: ${p.scopeOfWork}`);
+  const actuatorDesc = [p.actuatorMake, p.actuatorModelSize].filter(Boolean).join(" ");
+  if (actuatorDesc) findingLines.push(`Actuator: ${actuatorDesc}`);
+  const positionerDesc = [p.positionerMake, p.positionerModelAction].filter(Boolean).join(" ");
+  if (positionerDesc) findingLines.push(`Positioner: ${positionerDesc}`);
+
+  if (findingLines.length > 0) {
+    chunks.push(`<p><strong>Observations &amp; Findings</strong></p>`);
+    findingLines.forEach((l) => chunks.push(`<p>${esc(l)}</p>`));
   }
 
+  // ── Work Performed Summary ─────────────────────────────────────────────────
+  const workLines: string[] = [];
   const calParts: string[] = [];
   if (p.benchSetAsLeft) calParts.push(`Bench Set (As Left): ${p.benchSetAsLeft}`);
   if (p.supplyPressureAsLeft) calParts.push(`Supply Pressure (As Left): ${p.supplyPressureAsLeft} psi`);
   if (p.failActionAsLeft) calParts.push(`Fail Action: ${p.failActionAsLeft}`);
-  if (p.seatLeakClass) calParts.push(`Seat Leak Class: ${p.seatLeakClass}`);
-  if (calParts.length > 0) {
-    lines.push("Calibration Data");
-    lines.push(...calParts);
+  if (calParts.length > 0) workLines.push(`Actuator – ${calParts.join(" | ")}`);
+  if (p.seatLeakClass) workLines.push(`Valve – Seat Leak Class: ${p.seatLeakClass}`);
+
+  if (workLines.length > 0) {
+    chunks.push(`<p><br></p>`);
+    chunks.push(`<p><strong>Work Performed Summary</strong></p>`);
+    workLines.forEach((l) => chunks.push(`<p>${esc(l)}</p>`));
   }
 
-  return lines.join("\n").trim();
+  return chunks.join("");
+}
+
+/** @deprecated Use buildObservationsHtml — kept for backwards compatibility */
+export function buildObservationsText(p: ParsedPdfReport): string {
+  return buildObservationsHtml(p);
 }
 
 function parsedToRecordRow(p: ParsedPdfReport): (string | number)[] {
-  const obs = buildObservationsText(p);
+  const obs = buildObservationsHtml(p);
   const woRef = p.emrReference || p.crmodReference || "";
   const e = ""; // empty cell shorthand
 
@@ -615,7 +678,7 @@ function parsedToRecordRow(p: ParsedPdfReport): (string | number)[] {
     "Identified",        // Status
     e, e, e, e, e, e,   // Date closed → Test performance (6 empty)
     obs,                 // Observations [12]
-    p.repairDate,        // Occurrence date [13]
+    toIsoDate(p.repairDate), // Occurrence date [13]
     e,                   // Records event [14]
     p.technician,        // Customer contact [15]
     // [16-20] Valve/vibration health scores (5 empty)

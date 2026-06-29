@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import { ToastProvider } from "@/components/ui/ToastProvider";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
@@ -34,8 +35,10 @@ export default function RootLayout({
         />
       </head>
       <body className="flex h-full" style={{ background: "var(--bg-main)" }}>
-        <Sidebar />
-        <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
+        <ToastProvider>
+          <Sidebar />
+          <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
+        </ToastProvider>
       </body>
     </html>
   );

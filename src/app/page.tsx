@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Header from "@/components/Header";
 import StatusBadge from "@/components/StatusBadge";
+import { Button } from "@/components/ui/Button";
+import { ConfirmSheet } from "@/components/ui/ConfirmSheet";
+import { ReportsSkeleton } from "@/components/ui/Skeleton";
+import { useToast } from "@/components/ui/ToastProvider";
 import db, { deleteReportCascade } from "@/lib/db";
 import { exportIrisCsvMulti } from "@/lib/exports/iris";
 import {
@@ -19,10 +23,12 @@ type Mode = "idle" | "export" | "delete";
 
 export default function Home() {
   const router = useRouter();
+  const { toast } = useToast();
   const [ready, setReady] = useState(false);
   const [siteFilter, setSiteFilter] = useState("all");
   const [mode, setMode] = useState<Mode>("idle");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   useEffect(() => {
     ensureSeeded().then(() => setReady(true));
@@ -72,33 +78,30 @@ export default function Home() {
     const ids = selected.size > 0 ? [...selected] : reports.map((r) => r.id);
     await exportIrisCsvMulti(ids);
     cancelMode();
+    toast(`Exported ${ids.length} report${ids.length > 1 ? "s" : ""} to CSV`, "success");
   }
 
   async function handleDeleteConfirm() {
-    if (selected.size === 0) return;
     const count = selected.size;
-    if (
-      !confirm(
-        `Delete ${count} report${count > 1 ? "s" : ""} and all their findings/photos?`,
-      )
-    )
-      return;
     await Promise.all([...selected].map((id) => deleteReportCascade(id)));
     cancelMode();
+    setConfirmDeleteOpen(false);
+    toast(`Deleted ${count} report${count > 1 ? "s" : ""}`, "info");
   }
 
   if (!ready) {
     return (
-      <div style={{ background: "var(--bg-main)" }} className="min-h-screen">
+      <div className="min-h-screen" style={{ background: "var(--bg-main)" }}>
         <Header />
-        <p className="p-6" style={{ color: "var(--text-secondary)" }}>
-          Loading…
-        </p>
+        <main className="mx-auto max-w-3xl px-3 py-5 sm:px-6 sm:py-6">
+          <ReportsSkeleton />
+        </main>
       </div>
     );
   }
 
   const allSelected = selected.size === reports.length && reports.length > 0;
+  const deleteCount = selected.size;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--bg-main)" }}>
@@ -108,7 +111,9 @@ export default function Home() {
         {/* ── Site filter ── */}
         <div className="mb-5 flex items-end gap-3">
           <div className="flex-1">
-            <label htmlFor="site-filter" className="label-sm mb-1.5 block">Site</label>
+            <label htmlFor="site-filter" className="label-sm mb-1.5 block">
+              Site
+            </label>
             <select
               id="site-filter"
               className="input"
@@ -123,159 +128,133 @@ export default function Home() {
               ))}
             </select>
           </div>
-          <button type="button"
-            onClick={() => router.push("/sites")}
-            className="rounded-lg border px-4 py-2 text-sm font-semibold transition-colors"
-            style={{
-              background: "var(--bg-card)",
-              borderColor: "var(--border-solid)",
-              color: "var(--text-secondary)",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.color = "var(--text-primary)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.color = "var(--text-secondary)")
-            }
-          >
+          <Button variant="secondary" onClick={() => router.push("/sites")}>
             Manage
-          </button>
+          </Button>
         </div>
 
-        {/* ── Toolbar ── */}
+        {/* ── Idle toolbar ── */}
         {mode === "idle" && (
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="label-sm">Reports ({reports.length})</h2>
-            <div className="flex flex-wrap items-center gap-2">
+          <>
+            {/* Mobile: 2-row layout */}
+            <div className="mb-4 sm:hidden">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="label-sm">Reports ({reports.length})</h2>
+                <Button variant="primary" size="sm" onClick={handleNewReport}>
+                  + New Report
+                </Button>
+              </div>
               {reports.length > 0 && (
-                <>
-                  <button type="button"
-                    onClick={() => enterMode("export")}
-                    className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors sm:flex-none sm:py-1.5"
-                    style={{
-                      background: "#FEF3C7",
-                      color: "#92400E",
-                      border: "1px solid #FDE68A",
-                    }}
-                  >
-                    Export to IRIS
-                  </button>
-                  <button type="button"
-                    onClick={() => enterMode("delete")}
-                    className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold transition-colors sm:flex-none sm:py-1.5"
-                    style={{
-                      background: "#FEF2F2",
-                      color: "#991B1B",
-                      border: "1px solid #FECACA",
-                    }}
-                  >
+                <div className="flex gap-2">
+                  <Button variant="danger" size="sm" onClick={() => enterMode("delete")}>
                     Delete
-                  </button>
-                </>
+                  </Button>
+                  <Button variant="warning" size="sm" onClick={() => enterMode("export")}>
+                    Export to IRIS
+                  </Button>
+                </div>
               )}
-              <button type="button"
-                onClick={handleNewReport}
-                className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white transition-colors sm:flex-none sm:py-1.5"
-                style={{ background: "var(--accent)" }}
-                onMouseEnter={(e) =>
-                  (e.currentTarget.style.background = "var(--accent-hover)")
-                }
-                onMouseLeave={(e) =>
-                  (e.currentTarget.style.background = "var(--accent)")
-                }
-              >
-                + New Report
-              </button>
             </div>
-          </div>
+
+            {/* Desktop: single row — delete left (separated), actions right */}
+            <div className="mb-4 hidden sm:flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <h2 className="label-sm">Reports ({reports.length})</h2>
+                {reports.length > 0 && (
+                  <Button variant="danger" size="sm" onClick={() => enterMode("delete")}>
+                    Delete
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {reports.length > 0 && (
+                  <Button variant="warning" size="sm" onClick={() => enterMode("export")}>
+                    Export to IRIS
+                  </Button>
+                )}
+                <Button variant="primary" size="sm" onClick={handleNewReport}>
+                  + New Report
+                </Button>
+              </div>
+            </div>
+          </>
         )}
 
+        {/* ── Export mode banner ── */}
         {mode === "export" && (
           <div
             className="mb-4 rounded-xl border p-4"
-            style={{ background: "#FFFBEB", borderColor: "#FDE68A" }}
+            style={{
+              background: "var(--color-warning-bg)",
+              borderColor: "var(--color-warning-border)",
+            }}
           >
             <p
               className="mb-3 text-sm font-semibold"
-              style={{ color: "#92400E" }}
+              style={{ color: "var(--color-warning-text)" }}
             >
               Select reports to export to IRIS CSV
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <button type="button"
+              <button
+                type="button"
                 onClick={toggleSelectAll}
                 className="text-left text-sm font-medium underline"
-                style={{ color: "#B45309" }}
+                style={{ color: "var(--color-warning-text)" }}
               >
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button type="button"
-                  onClick={cancelMode}
-                  className="flex-1 rounded-lg border px-4 py-2 text-sm font-semibold sm:flex-none"
-                  style={{
-                    background: "var(--bg-card)",
-                    borderColor: "var(--border-solid)",
-                    color: "var(--text-secondary)",
-                  }}
-                >
+                <Button variant="secondary" onClick={cancelMode}>
                   Cancel
-                </button>
-                <button type="button"
-                  onClick={handleExportConfirm}
-                  className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white sm:flex-none"
-                  style={{ background: "#D97706" }}
-                >
+                </Button>
+                <Button variant="warning" onClick={handleExportConfirm}>
                   {selected.size === 0
                     ? `Export All (${reports.length})`
                     : `Export ${selected.size}`}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
         )}
 
+        {/* ── Delete mode banner ── */}
         {mode === "delete" && (
           <div
             className="mb-4 rounded-xl border p-4"
-            style={{ background: "#FEF2F2", borderColor: "#FECACA" }}
+            style={{
+              background: "var(--color-danger-bg)",
+              borderColor: "var(--color-danger-border)",
+            }}
           >
             <p
               className="mb-3 text-sm font-semibold"
-              style={{ color: "#991B1B" }}
+              style={{ color: "var(--color-danger-text)" }}
             >
               Select reports to delete
             </p>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <button type="button"
+              <button
+                type="button"
                 onClick={toggleSelectAll}
                 className="text-left text-sm font-medium underline"
-                style={{ color: "#DC2626" }}
+                style={{ color: "var(--color-danger-text)" }}
               >
                 {allSelected ? "Deselect all" : "Select all"}
               </button>
               <div className="flex gap-2">
-                <button type="button"
-                  onClick={cancelMode}
-                  className="flex-1 rounded-lg border px-4 py-2 text-sm font-semibold sm:flex-none"
-                  style={{
-                    background: "var(--bg-card)",
-                    borderColor: "var(--border-solid)",
-                    color: "var(--text-secondary)",
-                  }}
-                >
+                <Button variant="secondary" onClick={cancelMode}>
                   Cancel
-                </button>
-                <button type="button"
-                  onClick={handleDeleteConfirm}
-                  disabled={selected.size === 0}
-                  className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 sm:flex-none"
-                  style={{ background: "#DC2626" }}
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={deleteCount === 0}
+                  onClick={() => setConfirmDeleteOpen(true)}
                 >
-                  {selected.size === 0
+                  {deleteCount === 0
                     ? "Select to delete"
-                    : `Delete ${selected.size}`}
-                </button>
+                    : `Delete ${deleteCount}`}
+                </Button>
               </div>
             </div>
           </div>
@@ -307,7 +286,7 @@ export default function Home() {
                 className="flex cursor-pointer items-stretch rounded-xl transition-all"
                 style={{
                   background: "var(--bg-card)",
-                  border: `1px solid ${isSelected ? (isDeleteMode ? "#FECACA" : "#FDE68A") : "var(--border)"}`,
+                  border: `1px solid ${isSelected ? (isDeleteMode ? "var(--color-danger-border)" : "var(--color-warning-border)") : "var(--border)"}`,
                   boxShadow: isSelected
                     ? `0 0 0 2px ${ringColor}, var(--shadow-sm)`
                     : "var(--shadow-sm)",
@@ -332,7 +311,9 @@ export default function Home() {
                       onClick={(e) => e.stopPropagation()}
                       className="h-4 w-4 rounded"
                       style={{
-                        accentColor: isDeleteMode ? "#DC2626" : "#D97706",
+                        accentColor: isDeleteMode
+                          ? "var(--color-danger-text)"
+                          : "var(--color-warning-text)",
                       }}
                     />
                   </div>
@@ -348,17 +329,11 @@ export default function Home() {
                     </span>
                     <StatusBadge status={report.status} />
                   </div>
-                  <p
-                    className="text-sm"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
+                  <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
                     {report.customer || "No customer"} ·{" "}
                     {report.siteTitle || "No site"}
                   </p>
-                  <p
-                    className="mb-3 text-sm"
-                    style={{ color: "var(--text-label)" }}
-                  >
+                  <p className="mb-3 text-sm" style={{ color: "var(--text-label)" }}>
                     Tag {report.tagOrUnit || "—"} · {report.repairDate}
                   </p>
                   <div className="flex gap-2">
@@ -370,16 +345,50 @@ export default function Home() {
             );
           })}
 
+          {/* ── Empty state ── */}
           {reports.length === 0 && (
-            <p
-              className="py-8 text-center text-sm"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              No reports yet. Create your first report above.
-            </p>
+            <div className="flex flex-col items-center py-16 text-center">
+              <div
+                className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl"
+                style={{ background: "var(--bg-surface)" }}
+              >
+                <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                  <rect x="4" y="3" width="18" height="23" rx="3" stroke="var(--text-label)" strokeWidth="1.5" />
+                  <path d="M8 11h10M8 15h7M8 19h5" stroke="var(--text-label)" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="24" cy="24" r="6" fill="var(--accent)" />
+                  <path d="M24 21v3.5M24 24.5h3" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </div>
+              <h3
+                className="mb-1 text-base font-semibold"
+                style={{ color: "var(--text-primary)" }}
+              >
+                No repair reports yet
+              </h3>
+              <p
+                className="mb-6 text-sm"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                Create your first report to get started.
+              </p>
+              <Button variant="primary" onClick={handleNewReport}>
+                + New Report
+              </Button>
+            </div>
           )}
         </div>
       </main>
+
+      {/* ── Delete confirmation sheet ── */}
+      <ConfirmSheet
+        open={confirmDeleteOpen}
+        title={`Delete ${deleteCount} report${deleteCount > 1 ? "s" : ""}?`}
+        message="This will permanently remove the selected reports and all their findings and photos. This cannot be undone."
+        confirmLabel={`Delete ${deleteCount} Report${deleteCount > 1 ? "s" : ""}`}
+        variant="danger"
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }
@@ -390,7 +399,10 @@ function Pill({ active, label }: { active: boolean; label: string }) {
       className="rounded-full px-2.5 py-0.5 text-xs font-medium"
       style={
         active
-          ? { background: "#ECFDF5", color: "#065F46" }
+          ? {
+              background: "var(--color-success-bg)",
+              color: "var(--color-success-text)",
+            }
           : { background: "var(--bg-surface)", color: "var(--text-label)" }
       }
     >

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.1-8b-instant";
+const GROQ_MODEL_PROSE = "llama-3.3-70b-versatile";
 
 export async function GET() {
   const available = Boolean(process.env.GROQ_API_KEY);
@@ -62,6 +63,36 @@ Return a JSON object with the field keys listed above. Use "" for any field not 
 Do not guess or invent values — only extract what is clearly present in the text.`;
 }
 
+function buildObservationsPrompt(rawText: string): string {
+  return `You are analyzing a valve repair report. Generate an HTML observations block for the Iris asset management system.
+
+Use EXACTLY this structure (omit any component line if that component is not mentioned in the report):
+
+<p><strong>Observations &amp; Findings</strong></p>
+<p>Body: [1-2 sentences: condition found and work done to valve body/bonnet]</p>
+<p>Trim: [1-2 sentences: condition found and work done to trim/plug/stem/seat/cage]</p>
+<p>Actuator: [1-2 sentences: condition found and work done to actuator]</p>
+<p>Positioner: [1-2 sentences: condition found and work done to positioner/DVC]</p>
+<p>Tubing / Airset: [1-2 sentences: condition found and work done to tubing, air filter regulator]</p>
+<p><br></p>
+<p><strong>Work Performed Summary</strong></p>
+<p>Body – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Trim – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Actuator – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Positioner – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Tubing / Airset – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+
+Rules:
+- Use ONLY information found in the repair report text. Never invent or guess findings.
+- Omit any component line (from both sections) if that component is not mentioned.
+- No markdown, no extra HTML tags, no code fences — only <p>, <strong>, and <br>.
+- Encode & as &amp; inside text content.
+- Return ONLY the HTML block. No explanation, no preamble.
+
+Repair report text:
+${rawText.slice(0, 8000)}`;
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -75,6 +106,7 @@ export async function POST(req: NextRequest) {
     rawText?: string;
     fields?: Array<{ key: string; desc: string }>;
     examples?: TrainingExample[];
+    generateObservations?: boolean;
   };
   try {
     body = await req.json();
@@ -82,7 +114,60 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { rawText, fields, examples = [] } = body;
+  const { rawText, fields, examples = [], generateObservations } = body;
+
+  // ── Observations HTML generation mode ──────────────────────────────────────
+  if (generateObservations) {
+    if (!rawText?.trim()) {
+      return Response.json({ error: "rawText is required" }, { status: 400 });
+    }
+    try {
+      const res = await fetch(GROQ_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: GROQ_MODEL_PROSE,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a technical writer for a valve repair company. Output only the requested HTML — no markdown, no explanation.",
+            },
+            { role: "user", content: buildObservationsPrompt(rawText) },
+          ],
+          temperature: 0.1,
+          max_tokens: 1024,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+
+      if (!res.ok) {
+        const err = await res.text().catch(() => "");
+        return Response.json(
+          { error: `Groq ${res.status}: ${err.slice(0, 200)}` },
+          { status: 502 },
+        );
+      }
+
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const html = data.choices?.[0]?.message?.content?.trim() ?? "";
+      return Response.json({ observationsHtml: html });
+    } catch (err) {
+      return Response.json(
+        {
+          error: `Observations generation failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+        { status: 502 },
+      );
+    }
+  }
+
+  // ── Field extraction mode (existing) ───────────────────────────────────────
   if (!rawText || !fields?.length) {
     return Response.json(
       { error: "rawText and fields are required" },

@@ -34,6 +34,8 @@ export interface ParsedPdfReport {
   failActionAsLeft: string;
   actuatorAirAction: string;
   seatLeakClass: string;
+  // AI-generated observations HTML for the IRIS records CSV Observations field
+  observationsHtml?: string;
   // Internal: which pass produced this result + any validation notes
   _passCount?: number;
   _warnings?: string[];

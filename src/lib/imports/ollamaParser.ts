@@ -103,6 +103,30 @@ export interface AiExample {
 }
 
 /**
+ * Ask Groq to generate the full Observations HTML block from raw PDF text.
+ * Returns the HTML string, or null if unavailable / generation fails.
+ */
+export async function generateObservationsHtml(
+  rawText: string,
+): Promise<string | null> {
+  if (!rawText?.trim()) return null;
+  try {
+    const res = await fetch("/api/pdf-enhance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rawText, generateObservations: true }),
+      signal: AbortSignal.timeout(35_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { observationsHtml?: string };
+    const html = data.observationsHtml?.trim();
+    return html || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Enhance a parsed PDF report using Groq (via /api/pdf-enhance).
  * Only fills fields the regex pass left empty — never overwrites existing data.
  * Pass training examples for few-shot prompting to improve accuracy.
@@ -190,9 +214,22 @@ export async function enhanceWithAi(
 
     onProgress?.(
       filled.length > 0
-        ? `✓ AI filled ${filled.length} missing field(s)`
-        : "AI found no additional data",
+        ? `✓ AI filled ${filled.length} field(s) — generating observations…`
+        : "Generating observations…",
     );
+
+    // Second Groq call: generate the full Observations HTML block
+    const obsHtml = await generateObservationsHtml(rawText);
+    if (obsHtml) {
+      enhanced.observationsHtml = obsHtml;
+      onProgress?.("✓ Observations generated");
+    } else {
+      onProgress?.(
+        filled.length > 0
+          ? `✓ AI filled ${filled.length} field(s)`
+          : "AI found no additional data",
+      );
+    }
 
     return enhanced;
   } catch (err) {
