@@ -120,35 +120,35 @@ export default function ReportWizard() {
 
   if (!report) {
     return (
-      <div className="min-h-screen bg-zinc-50">
+      <div className="min-h-screen bg-[var(--bg-main)]">
         <Header />
-        <p className="p-6 text-zinc-500">Loading…</p>
+        <p className="p-6 text-[var(--text-secondary)]">Loading…</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50">
+    <div className="min-h-screen bg-[var(--bg-main)]">
       <Header />
       <main className="mx-auto max-w-3xl px-3 py-4 sm:px-6 sm:py-6">
         <div className="mb-4 flex items-center justify-between">
           <button type="button"
             onClick={() => router.push("/")}
-            className="text-sm font-medium text-[#154A8A]"
+            className="text-sm font-medium text-[var(--accent)]"
           >
             ← Back to Reports
           </button>
-          <span className="text-sm text-zinc-500">Step {step + 1}/4</span>
+          <span className="text-sm text-[var(--text-secondary)]">Step {step + 1}/4</span>
         </div>
 
-        <div className="mb-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 rounded-xl border border-[var(--border-solid)] bg-[var(--bg-card)] p-4 shadow-sm">
           <div className="mb-1 flex items-center justify-between">
-            <h1 className="text-lg font-bold text-zinc-900">
+            <h1 className="text-lg font-bold text-[var(--text-primary)]">
               {report.reportNumber}
             </h1>
-            <span className="text-sm text-zinc-500">{report.status}</span>
+            <span className="text-sm text-[var(--text-secondary)]">{report.status}</span>
           </div>
-          <p className="mb-3 text-sm text-zinc-500">
+          <p className="mb-3 text-sm text-[var(--text-secondary)]">
             {report.siteTitle || "No site"} • {report.tagOrUnit || "No tag"}
           </p>
           <StepIndicator
@@ -159,7 +159,7 @@ export default function ReportWizard() {
         </div>
 
         {step === 0 && (
-          <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+          <div className="rounded-xl border border-[var(--border-solid)] bg-[var(--bg-card)] shadow-sm">
             <SectionHeader
               title="Job Information"
               subtitle="Top-level details for this repair"
@@ -252,7 +252,7 @@ export default function ReportWizard() {
                 />
               </Field>
             </div>
-            <div className="flex justify-end gap-3 border-t border-zinc-100 p-4">
+            <div className="flex justify-end gap-3 border-t border-[var(--border)] p-4">
               <button type="button"
                 onClick={() => setStep(1)}
                 className="rounded-lg bg-[#154A8A] px-5 py-2 text-sm font-semibold text-white"
@@ -264,18 +264,18 @@ export default function ReportWizard() {
         )}
 
         {step === 1 && (
-          <div className="rounded-xl border border-amber-300 bg-white shadow-sm">
+          <div className="rounded-xl border border-amber-300 bg-[var(--bg-card)] shadow-sm">
             <SectionHeader
               title="Checkpoint 1 — As Found — Initial Inspection"
               subtitle="Capture the equipment as you arrived on site: nameplate data, construction, baseline calibration readings, and findings."
               tone="amber"
             />
             <div className="p-5">
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Construction — As Found
               </h3>
               <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <p className="col-span-full text-sm font-semibold text-zinc-500">
+                <p className="col-span-full text-sm font-semibold text-[var(--text-secondary)]">
                   VALVE / BODY
                 </p>
                 <Field label="Valve Make">
@@ -347,7 +347,7 @@ export default function ReportWizard() {
                   />
                 </Field>
 
-                <p className="col-span-full mt-2 text-sm font-semibold text-zinc-500">
+                <p className="col-span-full mt-2 text-sm font-semibold text-[var(--text-secondary)]">
                   ACTUATOR
                 </p>
                 <Field label="Actuator Make">
@@ -403,7 +403,7 @@ export default function ReportWizard() {
                   />
                 </Field>
 
-                <p className="col-span-full mt-2 text-sm font-semibold text-zinc-500">
+                <p className="col-span-full mt-2 text-sm font-semibold text-[var(--text-secondary)]">
                   POSITIONER
                 </p>
                 <Field label="Positioner Make">
@@ -433,7 +433,7 @@ export default function ReportWizard() {
                 </Field>
               </div>
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Calibration — As Found
               </h3>
               <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -520,7 +520,7 @@ export default function ReportWizard() {
                 </Field>
               </div>
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Findings — As Found
               </h3>
               <FindingsEditor
@@ -529,7 +529,7 @@ export default function ReportWizard() {
                 phase="asFound"
               />
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Photos — As Found
               </h3>
               <PhotoUploader
@@ -553,11 +553,11 @@ export default function ReportWizard() {
                 photos={photos ?? []}
               />
 
-              <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
-                <p className="mb-1 font-semibold text-amber-900">
+              <div className="mt-4 rounded-xl border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] p-4">
+                <p className="mb-1 font-semibold text-[var(--color-warning-text)]">
                   Leaving site? Export the As Found report.
                 </p>
-                <p className="mb-3 text-sm text-amber-800">
+                <p className="mb-3 text-sm text-[var(--color-warning-text)]">
                   Send this interim PDF to the office or attach it to the parts
                   request. You can come back later and add As Left readings.
                 </p>
@@ -570,17 +570,17 @@ export default function ReportWizard() {
                   </button>
                   <button type="button"
                     onClick={() => exportAsFoundJson(report.id)}
-                    className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
+                    className="flex-1 rounded-lg border border-[var(--border-solid)] bg-[var(--bg-card)] px-4 py-2 text-sm font-semibold text-[var(--text-secondary)]"
                   >
                     ⬇ Export As Found JSON
                   </button>
                 </div>
               </div>
             </div>
-            <div className="flex justify-between border-t border-zinc-100 p-4">
+            <div className="flex justify-between border-t border-[var(--border)] p-4">
               <button type="button"
                 onClick={() => setStep(0)}
-                className="rounded-lg border border-zinc-300 px-5 py-2 text-sm font-semibold text-zinc-700"
+                className="rounded-lg border border-[var(--border-solid)] px-5 py-2 text-sm font-semibold text-[var(--text-secondary)]"
               >
                 ← Back
               </button>
@@ -595,7 +595,7 @@ export default function ReportWizard() {
         )}
 
         {step === 2 && (
-          <div className="rounded-xl border border-emerald-300 bg-white shadow-sm">
+          <div className="rounded-xl border border-emerald-300 bg-[var(--bg-card)] shadow-sm">
             <SectionHeader
               title="Checkpoint 2 — As Left — Final Verification"
               subtitle="Record the repair outcome: calibration after repair, post-repair tests, and final findings."
@@ -616,12 +616,12 @@ export default function ReportWizard() {
               </Field>
 
               <div className="mb-4 flex items-center justify-between">
-                <h3 className="font-semibold text-zinc-800">
+                <h3 className="font-semibold text-[var(--text-primary)]">
                   Calibration — As Left
                 </h3>
                 <button type="button"
                   onClick={copyAllAsFoundToAsLeft}
-                  className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700"
+                  className="rounded-lg border border-[var(--color-success-border)] bg-[var(--color-success-bg)] px-3 py-1.5 text-xs font-semibold text-[var(--color-success-text)]"
                 >
                   Copy all As Found → As Left
                 </button>
@@ -634,7 +634,7 @@ export default function ReportWizard() {
                   >
                     <Field label={`${pair.label} (As Found)`}>
                       <input
-                        className="input bg-zinc-50"
+                        className="input bg-[var(--bg-surface)]"
                         value={String(report[pair.asFoundKey] ?? "")}
                         disabled
                       />
@@ -668,7 +668,7 @@ export default function ReportWizard() {
                         />
                       )}
                     </Field>
-                    <label className="flex items-center gap-2 pb-2 text-xs font-medium text-zinc-600">
+                    <label className="flex items-center gap-2 pb-2 text-xs font-medium text-[var(--text-secondary)]">
                       <input
                         type="checkbox"
                         checked={!!noChange[pair.label]}
@@ -689,14 +689,14 @@ export default function ReportWizard() {
                   className="max-w-xs"
                 >
                   <input
-                    className="input bg-zinc-50"
+                    className="input bg-[var(--bg-surface)]"
                     value={report.actuatorAirAction}
                     disabled
                   />
                 </Field>
               </div>
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Post Valve Repair Test Data
               </h3>
               <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -834,7 +834,7 @@ export default function ReportWizard() {
                 </Field>
               </div>
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Findings — As Left
               </h3>
               <FindingsEditor
@@ -843,7 +843,7 @@ export default function ReportWizard() {
                 phase="asLeft"
               />
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Photos — As Left
               </h3>
               <PhotoUploader
@@ -857,7 +857,7 @@ export default function ReportWizard() {
                 photos={photos ?? []}
               />
 
-              <h3 className="mb-3 font-semibold text-zinc-800">
+              <h3 className="mb-3 font-semibold text-[var(--text-primary)]">
                 Notes &amp; Recommendations
               </h3>
               <div className="mb-2 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -903,10 +903,10 @@ export default function ReportWizard() {
                 </Field>
               </div>
             </div>
-            <div className="flex justify-between border-t border-zinc-100 p-4">
+            <div className="flex justify-between border-t border-[var(--border)] p-4">
               <button type="button"
                 onClick={() => setStep(1)}
-                className="rounded-lg border border-zinc-300 px-5 py-2 text-sm font-semibold text-zinc-700"
+                className="rounded-lg border border-[var(--border-solid)] px-5 py-2 text-sm font-semibold text-[var(--text-secondary)]"
               >
                 ← Back
               </button>
@@ -921,12 +921,12 @@ export default function ReportWizard() {
         )}
 
         {step === 3 && (
-          <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
+          <div className="rounded-xl border border-[var(--border-solid)] bg-[var(--bg-card)] shadow-sm">
             <SectionHeader
               title="Review & Submit"
               subtitle="Final check before marking this report complete."
             />
-            <div className="p-5 text-sm text-zinc-700">
+            <div className="p-5 text-sm text-[var(--text-secondary)]">
               <p className="mb-2">
                 <strong>{report.reportNumber}</strong> — {report.tagOrUnit} @{" "}
                 {report.siteTitle}
@@ -938,8 +938,8 @@ export default function ReportWizard() {
               <p className="mb-4">Photos attached: {photos?.length ?? 0}</p>
 
               {report.status === "Complete" ? (
-                <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4">
-                  <p className="mb-3 font-semibold text-emerald-800">
+                <div className="rounded-lg border border-[var(--color-success-border)] bg-[var(--color-success-bg)] p-4">
+                  <p className="mb-3 font-semibold text-[var(--color-success-text)]">
                     ✓ Report marked Complete.
                   </p>
                   <div className="flex flex-col gap-3">
@@ -952,14 +952,14 @@ export default function ReportWizard() {
                       </button>
                       <button type="button"
                         onClick={() => exportRepairJson(report.id)}
-                        className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700"
+                        className="flex-1 rounded-lg border border-[var(--border-solid)] bg-[var(--bg-card)] px-4 py-2 text-sm font-semibold text-[var(--text-secondary)]"
                       >
                         Export JSON
                       </button>
                     </div>
                     <button type="button"
                       onClick={() => exportIrisCsv(report.id)}
-                      className="w-full rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800"
+                      className="w-full rounded-lg border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-4 py-2 text-sm font-semibold text-[var(--color-warning-text)]"
                     >
                       Export to IRIS CSV
                     </button>
@@ -974,16 +974,16 @@ export default function ReportWizard() {
                 </button>
               )}
             </div>
-            <div className="flex justify-between border-t border-zinc-100 p-4">
+            <div className="flex justify-between border-t border-[var(--border)] p-4">
               <button type="button"
                 onClick={() => setStep(2)}
-                className="rounded-lg border border-zinc-300 px-5 py-2 text-sm font-semibold text-zinc-700"
+                className="rounded-lg border border-[var(--border-solid)] px-5 py-2 text-sm font-semibold text-[var(--text-secondary)]"
               >
                 ← Back
               </button>
               <button type="button"
                 onClick={() => router.push("/")}
-                className="rounded-lg border border-zinc-300 px-5 py-2 text-sm font-semibold text-zinc-700"
+                className="rounded-lg border border-[var(--border-solid)] px-5 py-2 text-sm font-semibold text-[var(--text-secondary)]"
               >
                 Done
               </button>

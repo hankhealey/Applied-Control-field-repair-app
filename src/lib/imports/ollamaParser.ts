@@ -127,8 +127,9 @@ export async function generateObservationsHtml(
 }
 
 /**
- * Enhance a parsed PDF report using Groq (via /api/pdf-enhance).
- * Only fills fields the regex pass left empty — never overwrites existing data.
+ * Extract all fields from a parsed PDF report using Groq (via /api/pdf-enhance).
+ * Sends the full raw text and all fields — AI results overwrite regex output so
+ * fields the regex got wrong or missed are corrected from the source document.
  * Pass training examples for few-shot prompting to improve accuracy.
  */
 export async function enhanceWithAi(
@@ -144,14 +145,7 @@ export async function enhanceWithAi(
     };
   }
 
-  const emptyFields = PDF_FIELDS.filter((f) => {
-    const v = parsed[f.key];
-    return !v || String(v).trim() === "";
-  });
-
-  if (emptyFields.length === 0) return parsed;
-
-  onProgress?.(`Asking AI to fill ${emptyFields.length} missing field(s)…`);
+  onProgress?.("Reading document with AI…");
 
   try {
     const res = await fetch("/api/pdf-enhance", {
@@ -159,7 +153,7 @@ export async function enhanceWithAi(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         rawText,
-        fields: emptyFields.map((f) => ({ key: f.key, desc: f.desc })),
+        fields: PDF_FIELDS.map((f) => ({ key: f.key, desc: f.desc })),
         examples,
       }),
       signal: AbortSignal.timeout(35_000),
@@ -183,7 +177,7 @@ export async function enhanceWithAi(
     const enhanced = { ...parsed };
     const filled: string[] = [];
 
-    for (const { key } of emptyFields) {
+    for (const { key } of PDF_FIELDS) {
       const val = extracted[key as string];
       if (val && typeof val === "string" && val.trim()) {
         (enhanced as Record<string, unknown>)[key] = val.trim();
@@ -205,18 +199,12 @@ export async function enhanceWithAi(
       enhanced.positionerMake,
     );
 
-    if (filled.length > 0) {
-      enhanced._warnings = [
-        ...(parsed._warnings ?? []),
-        `AI filled ${filled.length} field(s): ${filled.join(", ")}`,
-      ];
-    }
+    enhanced._warnings = [
+      ...(parsed._warnings ?? []),
+      `AI extracted ${filled.length} field(s)`,
+    ];
 
-    onProgress?.(
-      filled.length > 0
-        ? `✓ AI filled ${filled.length} field(s) — generating observations…`
-        : "Generating observations…",
-    );
+    onProgress?.(`✓ AI extracted ${filled.length} field(s) — generating observations…`);
 
     // Second Groq call: generate the full Observations HTML block
     const obsHtml = await generateObservationsHtml(rawText);

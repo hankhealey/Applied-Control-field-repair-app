@@ -75,7 +75,7 @@ export default function PhotoUploader({
 
   return (
     <div className="mb-5">
-      <p className="mb-2 text-sm font-semibold text-zinc-700">{category}</p>
+      <p className="mb-2 text-sm font-semibold text-[var(--text-secondary)]">{category}</p>
       <button type="button"
         onClick={() => inputRef.current?.click()}
         className="mb-2 flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-3 text-sm font-semibold text-white"
@@ -92,13 +92,13 @@ export default function PhotoUploader({
         onChange={(e) => handleFiles(e.target.files)}
       />
       {categoryPhotos.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-zinc-300 py-6 text-center text-sm text-zinc-400">
+        <p className="rounded-lg border border-dashed border-[var(--border-solid)] py-6 text-center text-sm text-[var(--text-secondary)]">
           No photos yet for this category.
         </p>
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {categoryPhotos.map((p) => (
-            <div key={p.id} className="rounded-lg border border-zinc-200 p-2">
+            <div key={p.id} className="rounded-lg border border-[var(--border-solid)] p-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={p.photo}

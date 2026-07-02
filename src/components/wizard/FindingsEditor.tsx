@@ -90,10 +90,10 @@ export default function FindingsEditor({
         {findings.map((f) => (
           <div
             key={f.id}
-            className="rounded-lg border border-zinc-200 bg-white p-4"
+            className="rounded-lg border border-[var(--border-solid)] bg-[var(--bg-card)] p-4"
           >
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-semibold text-zinc-800">
+              <span className="text-sm font-semibold text-[var(--text-primary)]">
                 {f.componentCategory} — {f.componentName}
               </span>
               <button type="button"
@@ -135,7 +135,7 @@ export default function FindingsEditor({
                   />
                   <button type="button"
                     onClick={() => applyNoChange(f)}
-                    className="whitespace-nowrap rounded-lg border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700"
+                    className="whitespace-nowrap rounded-lg border border-[var(--border-solid)] px-3 py-2 text-xs font-semibold text-[var(--text-secondary)]"
                   >
                     No change
                   </button>
@@ -154,7 +154,7 @@ export default function FindingsEditor({
           </div>
         ))}
         {findings.length === 0 && (
-          <p className="text-sm text-zinc-400">No findings added yet.</p>
+          <p className="text-sm text-[var(--text-secondary)]">No findings added yet.</p>
         )}
       </div>
     </div>

@@ -23,8 +23,8 @@ export default function StepIndicator({
               isCurrent
                 ? "bg-[#154A8A] text-white"
                 : isDone
-                  ? "bg-emerald-100 text-emerald-700"
-                  : "bg-zinc-100 text-zinc-500"
+                  ? "bg-[var(--color-success-bg)] text-[var(--color-success-text)]"
+                  : "bg-[var(--bg-surface)] text-[var(--text-secondary)]"
             }`}
           >
             <span
@@ -33,7 +33,7 @@ export default function StepIndicator({
                   ? "bg-white/20"
                   : isDone
                     ? "bg-emerald-500 text-white"
-                    : "bg-zinc-300 text-white"
+                    : "bg-[var(--border-solid)] text-[var(--text-secondary)]"
               }`}
             >
               {isDone && !isCurrent ? "✓" : i + 1}

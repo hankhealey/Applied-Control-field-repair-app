@@ -2,10 +2,21 @@ import db from "../db";
 import type { ParsedPdfReport } from "../imports/pdfParser";
 import type { RepairReport } from "../types";
 
+export type IrisAssetType =
+  | "Control Valve" | "Isolation Valve" | "Motor Operated Valve"
+  | "Relief Valve" | "Manual Valve" | "Regulator" | "Steam Trap"
+  | "General" | "Machinery" | "Measurement" | "Tank";
+
 // Indices of "status" columns — IRIS expects these unquoted (e.g. No, Yes)
-// Valve status=11, Actuator status=42, Accessory status=63,
-// Device 1 status=78, Device 2 status=103, Device 3 status=128
-const STATUS_COLS = new Set([11, 42, 63, 78, 103, 128]);
+const STATUS_COLS_CV  = new Set([11, 42, 63, 78, 103, 128]); // CV/IV: Valve, Actuator, Accessory, Device 1-3
+const STATUS_COLS_RV  = new Set([11, 42]);                    // RV: Valve, Pilot
+const STATUS_COLS_MV   = new Set([11, 42]);  // Manual Valve: Valve, Accessory
+const STATUS_COLS_REG  = new Set([11, 22]);  // Regulator: Regulator, Pilot
+const STATUS_COLS_ST   = new Set([11]);      // Steam Trap
+const STATUS_COLS_GEN  = new Set([15]);      // General: General status at col 15
+const STATUS_COLS_MACH = new Set<number>([]); // Machinery: no status columns
+const STATUS_COLS_MEAS = new Set([11, 19]);  // Measurement: Measurement, Element
+const STATUS_COLS_TANK = new Set([11]);      // Tank
 
 // Headers exactly as IRIS expects: tab-prefixed, quoted, 153 columns total
 const HEADERS = [
@@ -162,7 +173,30 @@ const HEADERS = [
   "\tDevice 3 Level controller action",
   "\tDevice 3 Level controller vessel connection",
   "\tDevice 3 Vent id",
-]; // 153 columns
+]; // 153 columns — Control Valve
+
+// Relief Valve template: 49 columns (valve + pilot, no actuator/accessories/devices)
+const RELIEF_VALVE_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality",
+  "\tService description", "\tLocation", "\tGPS coordinates",
+  "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  // Valve section [11-41]
+  "\tValve status", "\tValve manufacturer", "\tValve model",
+  "\tValve serial number", "\tValve vendor asset Id", "\tValve size",
+  "\tValve pressure class", "\tValve rated travel", "\tValve seat material",
+  "\tValve leak class", "\tValve port size", "\tValve body material",
+  "\tValve trim style/number", "\tValve plug/disc/gate/ball material",
+  "\tValve stem/shaft material", "\tValve stem diameter", "\tValve cage material",
+  "\tValve packing type/material", "\tValve process fluid",
+  "\tCapacity", "\tCapacity units", "\tSet pressure", "\tSet pressure units",
+  "\tInlet size", "\tInlet size units", "\tInlet rating/type",
+  "\tOutlet size", "\tOutlet size units", "\tOutlet rating/type",
+  "\tOrifice size/letter", "\tValve flow direction",
+  // Pilot section [42-48]
+  "\tPilot status", "\tPilot manufacturer", "\tPilot model",
+  "\tPilot serial number", "\tPilot vendor asset Id",
+  "\tPilot size", "\tPilot spring range",
+]; // 49 columns — Relief Valve
 
 // Split "3-15" bench set string into [lower, upper]
 export function splitBenchSet(value: string): [string, string] {
@@ -378,19 +412,251 @@ export function reportToRow(r: RepairReport): string[] {
   ];
 }
 
-function buildCsv(reports: RepairReport[]): string {
-  // Header row: every header is quoted (tab prefix already embedded in value)
-  const headerLine = HEADERS.map((h) => `"${h}"`).join(",");
+// Isolation Valve uses the same 153-column layout as Control Valve — only Type differs
+export function reportToIsolationValveRow(r: RepairReport): string[] {
+  const row = reportToRow(r);
+  row[1] = "Isolation Valve";
+  return row;
+}
 
+// Returns exactly 49 values for the Relief Valve template
+export function reportToReliefValveRow(r: RepairReport): string[] {
+  const { model: valveModel, size: valveSize } = splitModelSize(r.valveModelSize || "");
+  return [
+    // [0-10] Basic
+    r.tagOrUnit, "Relief Valve", "", "", "",
+    r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    // [11-41] Valve
+    "No",               // [11] Valve status — unquoted
+    r.valveMake,        // [12]
+    valveModel,         // [13]
+    r.valveSerialNumber,// [14]
+    "",                 // [15] vendor asset id
+    valveSize,          // [16]
+    r.valveClassConnection, // [17] pressure class
+    r.ratedTravel,      // [18]
+    "",                 // [19] seat material
+    r.seatLeakClass,    // [20]
+    r.valveTrimCharPort,// [21] port size
+    "",                 // [22] body material
+    r.valveTrimCharPort,// [23] trim style
+    "", "", "", "",     // [24-27] plug, stem, stem dia, cage
+    r.valvePackingConfiguration, // [28]
+    r.process,          // [29] process fluid
+    "", "", "", "",     // [30-33] capacity + set pressure
+    "", "", "",         // [34-36] inlet
+    "", "", "",         // [37-39] outlet
+    "",                 // [40] orifice
+    r.valveFlowDirection, // [41]
+    // [42-48] Pilot
+    "No", "", "", "", "", "", "", // [42-48] Pilot status + 6 fields
+  ];
+}
+
+// Manual Valve: 57 columns — valve section + accessories, no actuator/devices
+const MANUAL_VALVE_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  // Valve [11-41]
+  "\tValve status", "\tValve manufacturer", "\tValve model", "\tValve serial number",
+  "\tValve vendor asset Id", "\tValve size", "\tValve pressure class", "\tValve rated travel",
+  "\tValve seat material", "\tValve leak class", "\tValve port size", "\tValve body material",
+  "\tValve trim style/number", "\tValve plug/disc/gate/ball material", "\tValve stem/shaft material",
+  "\tValve stem diameter", "\tValve cage material", "\tValve packing type/material", "\tValve process fluid",
+  "\tCapacity", "\tCapacity units", "\tSet pressure", "\tSet pressure units",
+  "\tInlet size", "\tInlet size units", "\tInlet rating/type",
+  "\tOutlet size", "\tOutlet size units", "\tOutlet rating/type",
+  "\tOrifice size/letter", "\tValve flow direction",
+  // Accessories [42-56]
+  "\tAccessory status", "\tAccessories Manufacturer", "\tAccessories Model",
+  "\tAccessories Serial number", "\tAccessories Vendor asset Id", "\tAccessories Gearbox",
+  "\tAccessories Volume booster", "\tAccessories Quick release", "\tAccessories Solenoid valve",
+  "\tAccessories Instrument regulator", "\tAccessories Pressure switch",
+  "\tAccessories Position transmitter", "\tAccessories Limit switch",
+  "\tAccessories Trip valve", "\tAccessories Handwheel",
+]; // 57 columns
+
+export function reportToManualValveRow(r: RepairReport): string[] {
+  const { model: valveModel, size: valveSize } = splitModelSize(r.valveModelSize || "");
+  return [
+    r.tagOrUnit, "Manual Valve", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "No", r.valveMake, valveModel, r.valveSerialNumber, "", valveSize,
+    r.valveClassConnection, r.ratedTravel, "", r.seatLeakClass, r.valveTrimCharPort, "",
+    r.valveTrimCharPort, "", "", "", "", r.valvePackingConfiguration, r.process,
+    "", "", "", "", "", "", "", "", "", "", "", r.valveFlowDirection,
+    "No", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+  ];
+}
+
+// Regulator: 29 columns — regulator section + pilot section
+const REGULATOR_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  // Regulator [11-21]
+  "\tRegulator status", "\tRegulator manufacturer", "\tRegulator model number",
+  "\tRegulator serial number", "\tRegulator vendor asset Id", "\tRegulator size",
+  "\tRegulator rating", "\tRegulator orifice size", "\tRegulator spring range",
+  "\tRegulator setpoint", "\tRegulator setpoint units",
+  // Pilot [22-28]
+  "\tPilot status", "\tPilot manufacturer", "\tPilot model",
+  "\tPilot serial number", "\tPilot vendor asset Id", "\tPilot size", "\tPilot spring range",
+]; // 29 columns
+
+export function reportToRegulatorRow(r: RepairReport): string[] {
+  const { model: valveModel, size: valveSize } = splitModelSize(r.valveModelSize || "");
+  return [
+    r.tagOrUnit, "Regulator", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "No", r.valveMake, valveModel, r.valveSerialNumber, "", valveSize,
+    r.valveClassConnection, "", "", "", "",
+    "No", "", "", "", "", "", "",
+  ];
+}
+
+// Steam Trap: 33 columns — steam trap section only
+const STEAM_TRAP_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  // Steam Trap [11-32]
+  "\tSteam Trap status", "\tSteam Trap manufacturer", "\tSteam Trap model",
+  "\tSteam Trap serial number", "\tSteam Trap vendor asset Id", "\tSteam Trap size",
+  "\tSteam Trap type", "\tSteam Trap connection", "\tSteam Trap orifice size",
+  "\tSteam Trap install orientation", "\tSteam Trap application type",
+  "\tSteam Trap inlet pressure", "\tSteam Trap outlet pressure",
+  "\tSteam Trap inlet temperature", "\tSteam Trap outlet temperature",
+  "\tSteam Trap ultrasonic reading", "\tSteam Trap ultrasonic dB flow",
+  "\tSteam Trap inlet isolation valve", "\tSteam Trap outlet isolation valve",
+  "\tSteam Trap inlet strainer", "\tSteam Trap outlet check valve",
+  "\tSteam Trap condensate recovered",
+]; // 33 columns
+
+export function reportToSteamTrapRow(r: RepairReport): string[] {
+  const { model: valveModel, size: valveSize } = splitModelSize(r.valveModelSize || "");
+  return [
+    r.tagOrUnit, "Steam Trap", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "No", r.valveMake, valveModel, r.valveSerialNumber, "", valveSize,
+    "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+  ];
+}
+
+// Motor Operated Valve: same 153-col layout as Control Valve, different Type
+export function reportToMotorOperatedValveRow(r: RepairReport): string[] {
+  const row = reportToRow(r);
+  row[1] = "Motor Operated Valve";
+  return row;
+}
+
+// General: 24 columns
+const GENERAL_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  "\tGeneral Subtype", "\tEquipment Type Description", "\tEquipment Type", "\tSub Type Description",
+  "\tGeneral status", "\tGeneral manufacturer", "\tGeneral model", "\tGeneral serial number",
+  "\tGeneral vendor asset Id", "\tGeneral size", "\tGeneral custom 1", "\tGeneral custom 2", "\tGeneral custom 3",
+]; // 24 columns
+
+export function reportToGeneralRow(r: RepairReport): string[] {
+  return [
+    r.tagOrUnit, "General", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "", "", "", "",  // [11-14] Subtype fields
+    "No",            // [15] General status
+    "", "", "", "", "", "", "", "",  // [16-23]
+  ];
+}
+
+// Machinery: 11 columns (basic section only)
+const MACHINERY_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+]; // 11 columns
+
+export function reportToMachineryRow(r: RepairReport): string[] {
+  return [
+    r.tagOrUnit, "Machinery", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+  ];
+}
+
+// Measurement: 28 columns
+const MEASUREMENT_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  "\tMeasurement status", "\tMeasurement type", "\tMeasurement technology",
+  "\tTransmitter manufacturer", "\tTransmitter model", "\tTransmitter serial number",
+  "\tTransmitter vendor asset Id", "\tEmission Vent ID",
+  "\tElement status", "\tElement manufacturer", "\tElement model", "\tElement serial number",
+  "\tElement vendor asset Id", "\tElement size", "\tElement pressure class",
+  "\tElement K-factor", "\tElement cal number",
+]; // 28 columns
+
+export function reportToMeasurementRow(r: RepairReport): string[] {
+  return [
+    r.tagOrUnit, "Measurement", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "No", "", "", "", "", "", "", "",  // [11-18] Measurement status + transmitter fields
+    "No", "", "", "", "", "", "", "", "",  // [19-27] Element section
+  ];
+}
+
+// Tank: 36 columns
+const TANK_HEADERS = [
+  "\tTag", "\tType", "\tArea", "\tApplication", "\tCriticality", "\tService description",
+  "\tLocation", "\tGPS coordinates", "\tP & ID no.", "\tDatasheet no.", "\tKeywords",
+  "\tTank status", "\tTank Manufacturer", "\tTank Model", "\tTank Serial Number",
+  "\tTank vendor asset Id", "\tTank Product", "\tTank API Standard", "\tTank Annex",
+  "\tTank Edition", "\tTank Nominal Diameter", "\tTank Maximum Capacity",
+  "\tTank Design Specific Gravity", "\tTank Design Pressure", "\tTank Pressure Combination Factor",
+  "\tTank Fabricated By", "\tTank Erected By", "\tTank Year Completed",
+  "\tTank Nominal Height", "\tTank Design Liquid Level", "\tTank Design Metal Temperature",
+  "\tTank Maximum Design Temperature", "\tTank Stress Relief", "\tTank Purchaser's Tank Number",
+  "\tTank Shell Course", "\tTank Material",
+]; // 36 columns
+
+export function reportToTankRow(r: RepairReport): string[] {
+  return [
+    r.tagOrUnit, "Tank", "", "", "", r.scopeOfWork, "", "",
+    r.emrReference, r.crmodReference, "",
+    "No", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+  ];
+}
+
+function assetTypeSuffix(t: IrisAssetType): string {
+  const map: Record<IrisAssetType, string> = {
+    "Control Valve": "", "Isolation Valve": "-iv", "Motor Operated Valve": "-mov",
+    "Relief Valve": "-rv", "Manual Valve": "-mv", "Regulator": "-reg", "Steam Trap": "-st",
+    "General": "-gen", "Machinery": "-mach", "Measurement": "-meas", "Tank": "-tank",
+  };
+  return map[t] ?? "";
+}
+
+function buildCsv(reports: RepairReport[], assetType: IrisAssetType = "Control Valve"): string {
+  const cfg: Record<IrisAssetType, { headers: string[]; statusCols: Set<number>; toRow: (r: RepairReport) => string[] }> = {
+    "Control Valve":       { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToRow },
+    "Isolation Valve":     { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToIsolationValveRow },
+    "Motor Operated Valve":{ headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToMotorOperatedValveRow },
+    "Relief Valve":        { headers: RELIEF_VALVE_HEADERS, statusCols: STATUS_COLS_RV,   toRow: reportToReliefValveRow },
+    "Manual Valve":        { headers: MANUAL_VALVE_HEADERS, statusCols: STATUS_COLS_MV,   toRow: reportToManualValveRow },
+    "Regulator":           { headers: REGULATOR_HEADERS,    statusCols: STATUS_COLS_REG,  toRow: reportToRegulatorRow },
+    "Steam Trap":          { headers: STEAM_TRAP_HEADERS,   statusCols: STATUS_COLS_ST,   toRow: reportToSteamTrapRow },
+    "General":             { headers: GENERAL_HEADERS,      statusCols: STATUS_COLS_GEN,  toRow: reportToGeneralRow },
+    "Machinery":           { headers: MACHINERY_HEADERS,    statusCols: STATUS_COLS_MACH, toRow: reportToMachineryRow },
+    "Measurement":         { headers: MEASUREMENT_HEADERS,  statusCols: STATUS_COLS_MEAS, toRow: reportToMeasurementRow },
+    "Tank":                { headers: TANK_HEADERS,         statusCols: STATUS_COLS_TANK, toRow: reportToTankRow },
+  };
+  const { headers, statusCols, toRow } = cfg[assetType];
+
+  const headerLine = headers.map((h) => `"${h}"`).join(",");
   const dataLines = reports.map((r) => {
-    const cells = reportToRow(r);
+    const cells = toRow(r);
     return cells
       .map((value, colIdx) => {
         const s = String(value ?? "");
         if (s === "") return "";
-        // Status columns are unquoted plain values (No / Yes)
-        if (STATUS_COLS.has(colIdx)) return s;
-        // All other text: wrap in quotes with tab prefix, escape inner quotes
+        if (statusCols.has(colIdx)) return s;
         return `"\t${s.replace(/"/g, '""')}"`;
       })
       .join(",");
@@ -494,26 +760,34 @@ function parsedToReport(p: ParsedPdfReport): RepairReport {
 }
 
 /** Export parsed PDF reports as an IRIS-compatible CSV */
-export function exportIrisCsvFromParsed(parsed: ParsedPdfReport[]): void {
+export function exportIrisCsvFromParsed(
+  parsed: ParsedPdfReport[],
+  assetType: IrisAssetType = "Control Valve",
+): void {
   if (!parsed.length) throw new Error("No parsed reports");
   const reports = parsed.map(parsedToReport);
+  const suffix = assetTypeSuffix(assetType);
   const filename =
     parsed.length === 1
-      ? `${parsed[0].tagOrUnit || "import"}-iris.csv`
-      : `pdf-iris-export-${new Date().toISOString().slice(0, 10)}.csv`;
-  triggerDownload(filename, buildCsv(reports));
+      ? `${parsed[0].tagOrUnit || "import"}${suffix}-iris.csv`
+      : `pdf-iris-export${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
+  triggerDownload(filename, buildCsv(reports, assetType));
 }
 
 /** Export multiple reports as an IRIS-compatible CSV (one row per report) */
-export async function exportIrisCsvMulti(reportIds: string[]): Promise<void> {
+export async function exportIrisCsvMulti(
+  reportIds: string[],
+  assetType: IrisAssetType = "Control Valve",
+): Promise<void> {
   const reports = await Promise.all(reportIds.map((id) => db.reports.get(id)));
   const valid = reports.filter((r): r is RepairReport => Boolean(r));
   if (valid.length === 0) throw new Error("No reports found");
+  const suffix = assetTypeSuffix(assetType);
   const filename =
     valid.length === 1
-      ? `${valid[0].reportNumber}-iris.csv`
-      : `applied-control-iris-export-${new Date().toISOString().slice(0, 10)}.csv`;
-  triggerDownload(filename, buildCsv(valid));
+      ? `${valid[0].reportNumber}${suffix}-iris.csv`
+      : `applied-control-iris-export${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
+  triggerDownload(filename, buildCsv(valid, assetType));
 }
 
 // Normalize any common date string to YYYY-MM-DD; returns original if unrecognized.
@@ -553,6 +827,10 @@ function toIsoDate(s: string): string {
 }
 
 // ── Records CSV (79-column template) ─────────────────────────────────────────
+// Universal across all asset types — Control Valve, Relief Valve, Isolation Valve,
+// Motor Operated Valve, Manual Valve, Regulator, Steam Trap, General, Machinery,
+// Measurement, and Tank all write to the same record template. Asset type only
+// determines which Assets CSV template is used, never which Records CSV.
 
 const RECORD_HEADERS = [
   "\tId", "\tType", "\tDescription", "\tDetails", "\tRef. WO/MOC", "\tStatus",

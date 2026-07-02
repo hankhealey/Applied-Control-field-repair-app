@@ -10,6 +10,7 @@ import {
   exportRecordsCsvFromParsed,
   splitBenchSet,
   splitModelSize,
+  type IrisAssetType,
 } from "@/lib/exports/iris";
 import { checkAiAvailable, enhanceWithAi } from "@/lib/imports/ollamaParser";
 import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
@@ -61,6 +62,7 @@ interface FileEntry {
   statusMsg?: string;
   error?: string;
   result?: ParsedPdfReport;
+  assetType: IrisAssetType;
 }
 
 export default function ImportPage() {
@@ -69,6 +71,8 @@ export default function ImportPage() {
   const [editing, setEditing] = useState<Record<string, Partial<ParsedPdfReport>>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+
+  const [pendingType, setPendingType] = useState<IrisAssetType | null>(null);
 
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const [useAi, setUseAi] = useState(true);
@@ -81,10 +85,21 @@ export default function ImportPage() {
   }, []);
 
   function addFiles(files: FileList | File[]) {
-    const arr = Array.from(files).filter((f) => f.type === "application/pdf");
+    if (!pendingType) return;
+    const all = Array.from(files);
+    const arr = all.filter((f) => f.type === "application/pdf");
+    const rejected = all.length - arr.length;
+    if (rejected > 0) toast(`${rejected} file${rejected > 1 ? "s" : ""} skipped — only PDFs are supported`, "error");
     if (!arr.length) return;
-    setEntries((prev) => [...prev, ...arr.map((f) => ({ file: f, status: "pending" as const }))]);
+    setEntries((prev) => [
+      ...prev,
+      ...arr.map((f) => ({ file: f, status: "pending" as const, assetType: pendingType })),
+    ]);
     arr.forEach(parseFile);
+  }
+
+  function setEntryAssetType(file: File, assetType: IrisAssetType) {
+    setEntries((prev) => prev.map((e) => e.file === file ? { ...e, assetType } : e));
   }
 
   async function parseFile(file: File) {
@@ -134,9 +149,26 @@ export default function ImportPage() {
   const doneEntries = entries.filter((e) => e.status === "done");
   const mergedResults = doneEntries.map((e) => getMergedResult(e)).filter((r): r is ParsedPdfReport => r !== undefined);
 
+  // Group done entries by asset type for Assets CSV export
+  const byType = doneEntries.reduce<Record<IrisAssetType, ParsedPdfReport[]>>(
+    (acc, e) => {
+      const r = getMergedResult(e);
+      if (r) acc[e.assetType].push(r);
+      return acc;
+    },
+    { "Control Valve": [], "Relief Valve": [], "Isolation Valve": [], "Motor Operated Valve": [], "Manual Valve": [], "Regulator": [], "Steam Trap": [], "General": [], "Machinery": [], "Measurement": [], "Tank": [] },
+  );
+  const typesPresent = (Object.keys(byType) as IrisAssetType[]).filter((t) => byType[t].length > 0);
+
   function exportLabel() {
     if (mergedResults.length === 1) return mergedResults[0].tagOrUnit || "import";
     return `${mergedResults.length} reports`;
+  }
+
+  function exportAllAssets() {
+    for (const t of typesPresent) {
+      exportIrisCsvFromParsed(byType[t], t);
+    }
   }
 
   return (
@@ -184,7 +216,7 @@ export default function ImportPage() {
                 className="rounded"
                 style={{ accentColor: "var(--accent)" }}
               />
-              Fill missing fields with AI
+              Read all fields with AI
             </label>
           )}
 
@@ -234,17 +266,55 @@ export default function ImportPage() {
           </div>
         )}
 
-        {/* Drop zone */}
+        {/* Step 1 — Asset type selector */}
+        <div
+          className="mb-4 rounded-xl border px-4 py-4"
+          style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}
+        >
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-label)" }}>
+            Step 1 — Select asset type
+          </p>
+          <p className="mb-3 text-xs" style={{ color: "var(--text-label)" }}>
+            Each type uses a different IRIS column template. You can override per file below.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {(["Control Valve", "Relief Valve", "Isolation Valve", "Motor Operated Valve", "Manual Valve", "Regulator", "Steam Trap", "General", "Machinery", "Measurement", "Tank"] as IrisAssetType[]).map((type) => {
+              const active = pendingType === type;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setPendingType(type)}
+                  className="rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                  style={
+                    active
+                      ? { background: "var(--accent)", borderColor: "var(--accent)", color: "#fff" }
+                      : { background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }
+                  }
+                >
+                  {type}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 2 — Drop zone (locked until type selected) */}
         <button
           type="button"
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          aria-disabled={!pendingType}
+          aria-describedby={!pendingType ? "dropzone-hint" : undefined}
+          onDragOver={(e) => { if (!pendingType) return; e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
-          onClick={() => fileInputRef.current?.click()}
-          className="mb-5 flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 transition-colors"
+          onClick={() => pendingType && fileInputRef.current?.click()}
+          className="mb-5 flex w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
           style={{
-            borderColor: dragOver ? "var(--accent)" : "var(--border-solid)",
-            background: dragOver ? "rgba(37,99,235,0.05)" : "var(--bg-card)",
+            borderColor: !pendingType ? "var(--border)" : dragOver ? "var(--accent)" : "var(--border-solid)",
+            background: !pendingType ? "var(--bg-surface)" : dragOver ? "rgba(37,99,235,0.05)" : "var(--bg-card)",
+            cursor: pendingType ? "pointer" : "not-allowed",
+            opacity: pendingType ? 1 : 0.5,
           }}
         >
           <input
@@ -260,8 +330,8 @@ export default function ImportPage() {
             <path d="M14 14h12M14 19h12M14 24h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             <path d="M24 4v8h8" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
           </svg>
-          <p className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
-            Drop PDF files here or click to browse
+          <p id="dropzone-hint" className="text-sm font-semibold" style={{ color: "var(--text-secondary)" }}>
+            {pendingType ? `Drop ${pendingType} PDFs here or click to browse` : "Select an asset type above first"}
           </p>
           <p className="text-xs" style={{ color: "var(--text-label)" }}>
             Applied Control repair report PDFs
@@ -315,6 +385,17 @@ export default function ImportPage() {
                   {entry.status === "pending" && (
                     <span className="text-xs" style={{ color: "var(--text-label)" }}>Pending</span>
                   )}
+                  {/* Per-file asset type override */}
+                  <select
+                    value={entry.assetType}
+                    onChange={(ev) => setEntryAssetType(entry.file, ev.target.value as IrisAssetType)}
+                    className="rounded border px-1.5 py-0.5 text-xs shrink-0"
+                    style={{ background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}
+                  >
+                    {(["Control Valve", "Relief Valve", "Isolation Valve", "Motor Operated Valve", "Manual Valve", "Regulator", "Steam Trap", "General", "Machinery", "Measurement", "Tank"] as IrisAssetType[]).map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                   {entry.status === "done" && (
                     <button
                       type="button"
@@ -357,8 +438,9 @@ export default function ImportPage() {
                     variant="secondary"
                     size="sm"
                     onClick={() => {
-                      exportIrisCsvFromParsed(mergedResults);
-                      toast(`Downloaded Assets CSV for ${exportLabel()}`, "success");
+                      exportAllAssets();
+                      const label = typesPresent.map((t) => ({ "Control Valve": "CV", "Relief Valve": "RV", "Isolation Valve": "IV", "Motor Operated Valve": "MOV", "Manual Valve": "MV", "Regulator": "Reg", "Steam Trap": "ST", "General": "Gen", "Machinery": "Mach", "Measurement": "Meas", "Tank": "Tank" } as Record<IrisAssetType, string>)[t] + " Assets").join(" + ");
+                      toast(`Downloaded ${label} CSV for ${exportLabel()}`, "success");
                     }}
                   >
                     Assets CSV
@@ -377,9 +459,10 @@ export default function ImportPage() {
                     variant="warning"
                     size="sm"
                     onClick={() => {
-                      exportIrisCsvFromParsed(mergedResults);
+                      exportAllAssets();
                       exportRecordsCsvFromParsed(mergedResults);
-                      toast(`Downloaded 2 files for ${exportLabel()}: Assets + Records CSV`, "success");
+                      const label = typesPresent.map((t) => ({ "Control Valve": "CV", "Relief Valve": "RV", "Isolation Valve": "IV", "Motor Operated Valve": "MOV", "Manual Valve": "MV", "Regulator": "Reg", "Steam Trap": "ST", "General": "Gen", "Machinery": "Mach", "Measurement": "Meas", "Tank": "Tank" } as Record<IrisAssetType, string>)[t] + " Assets").join(" + ");
+                      toast(`Downloaded ${label} + Records CSV for ${exportLabel()}`, "success");
                     }}
                   >
                     Export Both
