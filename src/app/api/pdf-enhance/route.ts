@@ -1,6 +1,26 @@
 import type { NextRequest } from "next/server";
+import { getIp } from "@/lib/ip";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+// Per-IP rate limit: 30 requests per 10 minutes to protect Groq API key spend.
+// In-memory only — resets on process restart (acceptable for local/self-hosted).
+const enhanceAttempts = new Map<string, { count: number; resetAt: number }>();
+const ENHANCE_WINDOW_MS = 10 * 60 * 1000;
+const ENHANCE_MAX = 30;
+
+function checkEnhanceRateLimit(req: NextRequest): Response | null {
+  const ip = getIp(req);
+  const now = Date.now();
+  const entry = enhanceAttempts.get(ip);
+  if (entry && now > entry.resetAt) enhanceAttempts.delete(ip);
+  const current = enhanceAttempts.get(ip);
+  if (current && current.count >= ENHANCE_MAX) {
+    return Response.json({ error: "Rate limit exceeded — try again later" }, { status: 429 });
+  }
+  enhanceAttempts.set(ip, { count: (current?.count ?? 0) + 1, resetAt: current?.resetAt ?? now + ENHANCE_WINDOW_MS });
+  return null;
+}
 const GROQ_MODEL = "llama-3.1-8b-instant";
 const GROQ_MODEL_PROSE = "llama-3.3-70b-versatile";
 
@@ -94,6 +114,9 @@ ${rawText.slice(0, 8000)}`;
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimitHit = checkEnhanceRateLimit(req);
+  if (rateLimitHit) return rateLimitHit;
+
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     return Response.json(
@@ -115,6 +138,14 @@ export async function POST(req: NextRequest) {
   }
 
   const { rawText, fields, examples = [], generateObservations } = body;
+
+  // Guard oversized inputs to cap Groq cost and prevent abuse
+  if ((rawText?.length ?? 0) > 100_000) {
+    return Response.json({ error: "rawText too large" }, { status: 413 });
+  }
+  if ((examples?.length ?? 0) > 10) {
+    return Response.json({ error: "too many examples" }, { status: 400 });
+  }
 
   // ── Observations HTML generation mode ──────────────────────────────────────
   if (generateObservations) {

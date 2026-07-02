@@ -22,7 +22,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       // data: for PDF page images; blob: for pdfjs-dist worker and Playwright screenshots
       "img-src 'self' data: blob:",
-      "connect-src 'self'",
+      "connect-src 'self' https://api.groq.com",
       // pdfjs-dist loads its worker via blob: URL
       "worker-src 'self' blob:",
       "font-src 'self'",
