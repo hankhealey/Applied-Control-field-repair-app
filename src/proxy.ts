@@ -10,7 +10,7 @@ const PUBLIC = ["/login", "/privacy", "/api/auth", "/api/support"];
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC.some((p) => pathname.startsWith(p))) {
