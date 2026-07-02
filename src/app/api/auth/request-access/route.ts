@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import type { NextRequest } from "next/server";
 import { getIp } from "@/lib/ip";
 import { kvStore } from "@/lib/kv";
-import { resend, EMAIL_FROM, ADMIN_EMAIL, APP_URL } from "@/lib/email";
+import { getResend, EMAIL_FROM, ADMIN_EMAIL, APP_URL } from "@/lib/email";
 
 const requestAttempts = new Map<string, { count: number; resetAt: number }>();
 const REQUEST_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
   ].join("\n");
 
   try {
-    await resend.emails.send({
+    await getResend().emails.send({
       from: EMAIL_FROM,
       to: ADMIN_EMAIL,
       subject: `Access Request: ${name} (${email})`,

@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import type { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import { kvStore } from "@/lib/kv";
-import { resend, EMAIL_FROM, APP_URL } from "@/lib/email";
+import { getResend, EMAIL_FROM, APP_URL } from "@/lib/email";
 
 function htmlPage(title: string, body: string): Response {
   return new Response(
@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
 
   if (action === "deny") {
     if (process.env.RESEND_API_KEY) {
-      await resend.emails
+      await getResend().emails
         .send({
           from: EMAIL_FROM,
           to: pending.email,
@@ -104,7 +104,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (process.env.RESEND_API_KEY) {
-    await resend.emails
+    await getResend().emails
       .send({
         from: EMAIL_FROM,
         to: pending.email,

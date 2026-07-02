@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { getIp } from "@/lib/ip";
-import { resend, EMAIL_FROM, ADMIN_EMAIL } from "@/lib/email";
+import { getResend, EMAIL_FROM, ADMIN_EMAIL } from "@/lib/email";
 
 const ticketAttempts = new Map<string, { count: number; resetAt: number }>();
 const TICKET_WINDOW_MS = 60 * 60 * 1000; // 1 hour
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
   ].join("\n");
 
   try {
-    await resend.emails.send({
+    await getResend().emails.send({
       from: EMAIL_FROM,
       to: ADMIN_EMAIL,
       replyTo: email,
