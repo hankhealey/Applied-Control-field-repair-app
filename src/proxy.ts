@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { kv } from "@vercel/kv";
 import { computeSessionToken, SESSION_COOKIE } from "@/lib/auth";
 import type { UserSession } from "@/lib/kv";
+import { kvStore } from "@/lib/kv";
 
 const PUBLIC = ["/login", "/privacy", "/api/auth", "/api/support"];
 
@@ -31,9 +31,9 @@ export async function proxy(req: NextRequest) {
       const expected = await computeSessionToken(password, secret);
       if (cookie === expected) return NextResponse.next();
     } else if (UUID_RE.test(cookie) && process.env.KV_REST_API_URL) {
-      // Per-user session stored in Vercel KV
+      // Per-user session stored in KV
       try {
-        const session = await kv.get<UserSession>(`session:${cookie}`);
+        const session = await kvStore.getSession(cookie);
         if (session && session.expiresAt > Date.now()) return NextResponse.next();
       } catch {
         // KV unavailable — fall through to redirect

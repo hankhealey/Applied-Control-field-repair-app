@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
-    "@vercel/kv": "^3.0.0",
+    "@upstash/redis": "^1.38.0",
     "bcryptjs": "^3.0.3",
     "dexie": "^4.4.3",
     "dexie-react-hooks": "^4.4.0",
