@@ -3,8 +3,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import { ToastProvider } from "@/components/ui/ToastProvider";
-import SupportButton from "@/components/SupportButton";
-
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -40,7 +38,6 @@ export default function RootLayout({
         <ToastProvider>
           <Sidebar />
           <div className="flex flex-1 flex-col overflow-y-auto">{children}</div>
-          <SupportButton />
         </ToastProvider>
       </body>
     </html>
