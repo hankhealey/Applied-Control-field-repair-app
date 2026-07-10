@@ -39,8 +39,16 @@ function buildPrompt(
   fields: Array<{ key: string; desc: string }>,
   rawText: string,
   examples: TrainingExample[],
+  rules: string[] = [],
 ): string {
   const fieldList = fields.map((f) => `- "${f.key}": ${f.desc}`).join("\n");
+
+  // User correction rules block (each truncated to keep tokens bounded)
+  const rulesBlock = rules
+    .map((r) => r.trim().slice(0, 300))
+    .filter(Boolean)
+    .map((r) => `- ${r}`)
+    .join("\n");
 
   // Few-shot examples block (max 3, truncate each to keep tokens reasonable)
   let examplesBlock = "";
@@ -68,6 +76,13 @@ ${JSON.stringify(nonEmpty, null, 2)}
 Fields to extract:
 ${fieldList}
 ${
+  rulesBlock
+    ? `
+User correction rules — follow these strictly, they override your defaults:
+${rulesBlock}
+`
+    : ""
+}${
   examplesBlock
     ? `
 Here are real examples showing how to read these reports correctly:
@@ -129,6 +144,7 @@ export async function POST(req: NextRequest) {
     rawText?: string;
     fields?: Array<{ key: string; desc: string }>;
     examples?: TrainingExample[];
+    rules?: string[];
     generateObservations?: boolean;
   };
   try {
@@ -137,7 +153,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { rawText, fields, examples = [], generateObservations } = body;
+  const { rawText, fields, examples = [], rules = [], generateObservations } = body;
 
   // Guard oversized inputs to cap Groq cost and prevent abuse
   if ((rawText?.length ?? 0) > 100_000) {
@@ -145,6 +161,9 @@ export async function POST(req: NextRequest) {
   }
   if ((examples?.length ?? 0) > 10) {
     return Response.json({ error: "too many examples" }, { status: 400 });
+  }
+  if (!Array.isArray(rules) || rules.length > 50 || rules.some((r) => typeof r !== "string")) {
+    return Response.json({ error: "invalid rules" }, { status: 400 });
   }
 
   // ── Observations HTML generation mode ──────────────────────────────────────
@@ -206,7 +225,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const prompt = buildPrompt(fields, rawText, examples);
+  const prompt = buildPrompt(fields, rawText, examples, rules);
 
   try {
     const res = await fetch(GROQ_URL, {

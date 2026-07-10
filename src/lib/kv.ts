@@ -26,9 +26,17 @@ export interface UserSession {
   expiresAt: number;
 }
 
+// Shared AI extraction rules — one global set visible to every user
+export interface SharedAIRule {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
 const rk = (token: string) => `req:${token}`;
 const uk = (email: string) => `user:${email.toLowerCase()}`;
 const sk = (id: string) => `session:${id}`;
+const AI_RULES_KEY = "ai-rules:global";
 
 export const kvStore = {
   getRequest: (token: string) => kv.get<PendingRequest>(rk(token)),
@@ -43,4 +51,7 @@ export const kvStore = {
   setSession: (id: string, data: UserSession, exSeconds: number) =>
     kv.set(sk(id), data, { ex: exSeconds }),
   delSession: (id: string) => kv.del(sk(id)),
+
+  getAIRules: () => kv.get<SharedAIRule[]>(AI_RULES_KEY),
+  setAIRules: (rules: SharedAIRule[]) => kv.set(AI_RULES_KEY, rules),
 };

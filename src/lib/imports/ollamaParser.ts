@@ -136,6 +136,7 @@ export async function enhanceWithAi(
   parsed: ParsedPdfReport,
   onProgress?: (message: string) => void,
   examples: AiExample[] = [],
+  rules: string[] = [],
 ): Promise<ParsedPdfReport> {
   const rawText = parsed._rawText;
   if (!rawText?.trim()) {
@@ -155,6 +156,7 @@ export async function enhanceWithAi(
         rawText,
         fields: PDF_FIELDS.map((f) => ({ key: f.key, desc: f.desc })),
         examples,
+        rules,
       }),
       signal: AbortSignal.timeout(35_000),
     });

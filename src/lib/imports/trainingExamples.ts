@@ -31,7 +31,11 @@ export function saveTrainingExample(
     id: crypto.randomUUID(),
     savedAt: new Date().toISOString(),
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify([...examples, next]));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...examples, next]));
+  } catch {
+    // QuotaExceededError or SecurityError — return the example but don't persist
+  }
   return next;
 }
 

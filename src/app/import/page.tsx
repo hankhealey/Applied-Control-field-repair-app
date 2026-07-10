@@ -12,6 +12,14 @@ import {
   splitModelSize,
   type IrisAssetType,
 } from "@/lib/exports/iris";
+import {
+  addAIRule,
+  type AIRule,
+  fetchAIRules,
+  removeAIRule,
+  RULE_MIN_CHARS,
+  ruleTextsForPrompt,
+} from "@/lib/imports/aiRules";
 import { checkAiAvailable, enhanceWithAi } from "@/lib/imports/ollamaParser";
 import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
 import {
@@ -78,10 +86,19 @@ export default function ImportPage() {
   const [useAi, setUseAi] = useState(true);
   const [examples, setExamples] = useState<TrainingExample[]>([]);
   const [showExamples, setShowExamples] = useState(false);
+  const [rules, setRules] = useState<AIRule[]>([]);
+  const [rulesShared, setRulesShared] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState("");
 
   useEffect(() => {
     checkAiAvailable().then(setAiAvailable);
     setExamples(getTrainingExamples());
+    fetchAIRules().then(({ rules: loadedRules, shared }) => {
+      setRules(loadedRules);
+      setRulesShared(shared);
+      setShowRules(loadedRules.length > 0);
+    });
   }, []);
 
   function addFiles(files: FileList | File[]) {
@@ -110,7 +127,7 @@ export default function ImportPage() {
         setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…" } : e));
         result = await enhanceWithAi(result, (msg) => {
           setEntries((prev) => prev.map((e) => (e.file === file ? { ...e, statusMsg: msg } : e)));
-        }, examples);
+        }, examples, ruleTextsForPrompt(rules));
       }
       setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "done", result, statusMsg: undefined } : e));
     } catch (err) {
@@ -124,17 +141,66 @@ export default function ImportPage() {
 
   function saveExample(entry: FileEntry) {
     const merged = getMergedResult(entry);
-    if (!merged?._rawText) return;
+    if (!merged?._rawText) {
+      toast("Cannot train: no raw text extracted from this PDF", "error");
+      return;
+    }
     const fields = Object.fromEntries(
       Object.entries(merged).filter(([k, v]) => !k.startsWith("_") && typeof v === "string" && v.trim()),
     ) as Record<string, string>;
-    const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText, fields });
+    const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText!, fields });
     setExamples((prev) => [...prev, saved]);
+    toast(`Training example saved — ${Object.keys(fields).length} fields`, "success");
+
+    // E1: if the user corrected fields, pre-fill a rule suggestion in the chat log
+    const edits = editing[entry.file.name];
+    if (edits && entry.result) {
+      const parts: string[] = [];
+      for (const [k, v] of Object.entries(edits)) {
+        if (k.startsWith("_") || k === "observationsHtml" || typeof v !== "string") continue;
+        const orig = (entry.result as unknown as Record<string, unknown>)[k];
+        if (typeof orig === "string" && orig !== v && v.trim()) {
+          parts.push(`the "${k}" field should be "${v}" (AI extracted "${orig || "nothing"}")`);
+        }
+        if (parts.length >= 2) break;
+      }
+      if (parts.length > 0) {
+        setRuleDraft(`On reports like ${entry.file.name.replace(/\.pdf$/i, "")}, ${parts.join("; ")}. Rule: `);
+        setShowRules(true);
+        toast("Tip: turn that correction into a rule below so the AI stops making it", "info");
+      }
+    }
   }
 
   function removeExample(id: string) {
     deleteTrainingExample(id);
     setExamples((prev) => prev.filter((e) => e.id !== id));
+  }
+
+  async function addRule() {
+    const result = await addAIRule(ruleDraft);
+    if ("error" in result) {
+      toast(result.error, "error");
+      return;
+    }
+    setRulesShared(result.shared);
+    setRules((prev) => prev.some((r) => r.id === result.rule.id) ? prev : [...prev, result.rule]);
+    setRuleDraft("");
+    toast(
+      result.shared
+        ? "Rule saved — shared with all users, applies to every AI extraction"
+        : "Rule saved to this browser — applies to every AI extraction here",
+      "success",
+    );
+  }
+
+  async function removeRule(id: string) {
+    const ok = await removeAIRule(id, rulesShared);
+    if (!ok) {
+      toast("Failed to delete rule — try again", "error");
+      return;
+    }
+    setRules((prev) => prev.filter((r) => r.id !== id));
   }
 
   function applyEdit(filename: string, patch: Partial<ParsedPdfReport>) {
@@ -227,16 +293,26 @@ export default function ImportPage() {
             </span>
           )}
 
-          {examples.length > 0 && (
+          <div className="ml-auto flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setShowExamples((v) => !v)}
-              className="ml-auto text-xs hover:underline"
+              onClick={() => setShowRules((v) => !v)}
+              className="text-xs hover:underline"
               style={{ color: "var(--accent)" }}
             >
-              {examples.length} training example{examples.length !== 1 ? "s" : ""} {showExamples ? "▲" : "▼"}
+              {rules.length > 0 ? `${rules.length} AI rule${rules.length !== 1 ? "s" : ""}` : "+ AI rules"} {showRules ? "▲" : "▼"}
             </button>
-          )}
+            {examples.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowExamples((v) => !v)}
+                className="text-xs hover:underline"
+                style={{ color: "var(--accent)" }}
+              >
+                {examples.length} training example{examples.length !== 1 ? "s" : ""} {showExamples ? "▲" : "▼"}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Training examples list */}
@@ -262,6 +338,100 @@ export default function ImportPage() {
                   </button>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* AI correction rules — chat log */}
+        {showRules && (
+          <div
+            className="mb-4 rounded-xl border"
+            style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}
+          >
+            <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+                  AI Correction Rules
+                </h2>
+                <span
+                  className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
+                  style={
+                    rulesShared
+                      ? { background: "var(--color-success-bg)", borderColor: "var(--color-success-border)", color: "var(--color-success-text)" }
+                      : { background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-label)" }
+                  }
+                  title={
+                    rulesShared
+                      ? "Rules are stored in the cloud — every user sees and contributes to the same set"
+                      : "Shared storage not configured — rules are saved in this browser only"
+                  }
+                >
+                  {rulesShared ? "Shared with all users" : "This browser only"}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs" style={{ color: "var(--text-label)" }}>
+                Tell the AI what it keeps getting wrong. Each message becomes a rule applied to every extraction.
+              </p>
+            </div>
+
+            {rules.length > 0 && (
+              <div className="flex flex-col gap-2 px-4 py-3 max-h-64 overflow-y-auto">
+                {rules.map((rule) => (
+                  <div key={rule.id} className="flex items-start gap-2 group">
+                    <div
+                      className="flex-1 rounded-lg rounded-tl-sm border px-3 py-2 text-xs leading-relaxed"
+                      style={{
+                        background: "var(--bg-surface)",
+                        borderColor: "var(--border)",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      {rule.text}
+                      <span className="ml-2 text-[10px]" style={{ color: "var(--text-label)" }}>
+                        {new Date(rule.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeRule(rule.id)}
+                      title="Delete rule"
+                      className="mt-1.5 opacity-30 hover:opacity-100 hover:text-red-500 transition-opacity text-xs"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div
+              className="flex items-end gap-2 px-4 py-3"
+              style={{ borderTop: rules.length > 0 ? "1px solid var(--border)" : undefined }}
+            >
+              <textarea
+                value={ruleDraft}
+                onChange={(ev) => setRuleDraft(ev.target.value)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" && !ev.shiftKey) {
+                    ev.preventDefault();
+                    addRule();
+                  }
+                }}
+                rows={2}
+                placeholder='e.g. "Never include the manufacturer name in the valve model field"'
+                className="flex-1 resize-none rounded-lg border px-3 py-2 text-xs outline-none"
+                style={{
+                  background: "var(--bg-input, var(--bg-surface))",
+                  borderColor: "var(--border-solid)",
+                  color: "var(--text-primary)",
+                }}
+                onFocus={(ev) => (ev.currentTarget.style.borderColor = "var(--accent)")}
+                onBlur={(ev) => (ev.currentTarget.style.borderColor = "var(--border-solid)")}
+              />
+              <Button variant="secondary" size="sm" onClick={addRule} disabled={ruleDraft.trim().length < RULE_MIN_CHARS}>
+                Add Rule
+              </Button>
             </div>
           </div>
         )}
@@ -544,12 +714,12 @@ export default function ImportPage() {
               </p>
             </div>
 
-            {/* Records CSV preview */}
+            {/* Records CSV — editable */}
             <div className="mb-5">
               <div className="mb-3">
-                <h2 className="label-sm">Records CSV Preview</h2>
+                <h2 className="label-sm">Records CSV — review and correct before exporting</h2>
                 <p className="text-xs mt-0.5" style={{ color: "var(--text-label)" }}>
-                  One Preventative record per report — linked to the asset by tag.
+                  One Preventative record per report. Edit any cell — corrections are included when you click + Train AI.
                 </p>
               </div>
               <div
@@ -559,17 +729,26 @@ export default function ImportPage() {
                 <table className="text-xs" style={{ minWidth: "max-content" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
-                      {["Assets", "Type", "Status", "Description", "Occurrence date", "WO/MOC ref.", "Customer contact", "Observations"].map((h, i) => (
+                      {[
+                        { label: "Assets", sticky: true },
+                        { label: "Type" },
+                        { label: "Status" },
+                        { label: "Description", wide: true },
+                        { label: "Occurrence date" },
+                        { label: "WO/MOC ref." },
+                        { label: "Customer contact" },
+                        { label: "Observations", wide: true },
+                      ].map(({ label, sticky, wide }, i) => (
                         <th
-                          key={h}
-                          className={`px-3 py-2 text-left font-semibold whitespace-nowrap ${i === 0 ? "sticky left-0 z-10 min-w-[120px] border-r" : ""} ${h === "Description" || h === "Observations" ? "min-w-[160px]" : ""}`}
+                          key={label}
+                          className={`px-3 py-2 text-left font-semibold whitespace-nowrap${sticky ? " sticky left-0 z-10 min-w-[120px] border-r" : ""}${wide ? " min-w-[180px]" : ""}`}
                           style={{
                             background: "var(--bg-surface)",
                             borderColor: "var(--border)",
                             color: i === 0 ? "var(--text-secondary)" : "var(--text-label)",
                           }}
                         >
-                          {h}
+                          {label}
                         </th>
                       ))}
                     </tr>
@@ -580,31 +759,80 @@ export default function ImportPage() {
                       if (!r) return null;
                       const obs = buildObservationsHtml(r);
                       const woRef = r.emrReference || r.crmodReference || "";
+
+                      function recCell(value: string, field: keyof ParsedPdfReport, placeholder = "—") {
+                        return (
+                          <td key={field} className="px-2 py-1 min-w-[140px]">
+                            <input
+                              type="text"
+                              value={value}
+                              onChange={(ev) => applyEdit(e.file.name, { [field]: ev.target.value })}
+                              className="w-full rounded-lg border px-2 py-1 text-xs outline-none"
+                              style={{
+                                background: "var(--bg-input, var(--bg-surface))",
+                                borderColor: value ? "var(--border-solid)" : "var(--border)",
+                                color: value ? "var(--text-primary)" : "var(--text-label)",
+                              }}
+                              onFocus={(ev) => (ev.currentTarget.style.borderColor = "var(--accent)")}
+                              onBlur={(ev) => (ev.currentTarget.style.borderColor = value ? "var(--border-solid)" : "var(--border)")}
+                              placeholder={placeholder}
+                            />
+                          </td>
+                        );
+                      }
+
                       return (
                         <tr key={e.file.name} style={{ borderTop: rowIdx > 0 ? "1px solid var(--border)" : undefined }}>
-                          <td
-                            className="sticky left-0 z-10 px-3 py-1.5 font-medium border-r whitespace-nowrap"
-                            style={{ background: "var(--bg-card)", borderColor: "var(--border)", color: "var(--text-primary)" }}
-                          >
-                            {r.tagOrUnit || "—"}
+                          {/* Assets — sticky tag cell */}
+                          <td className="sticky left-0 z-10 px-2 py-1 border-r min-w-[140px]" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
+                            <input
+                              type="text"
+                              value={r.tagOrUnit}
+                              onChange={(ev) => applyEdit(e.file.name, { tagOrUnit: ev.target.value })}
+                              className="w-full rounded-lg border px-2 py-1 text-xs outline-none font-medium"
+                              style={{
+                                background: "var(--bg-input, var(--bg-surface))",
+                                borderColor: r.tagOrUnit ? "var(--border-solid)" : "var(--border)",
+                                color: r.tagOrUnit ? "var(--text-primary)" : "var(--text-label)",
+                              }}
+                              onFocus={(ev) => (ev.currentTarget.style.borderColor = "var(--accent)")}
+                              onBlur={(ev) => (ev.currentTarget.style.borderColor = r.tagOrUnit ? "var(--border-solid)" : "var(--border)")}
+                              placeholder="—"
+                            />
                           </td>
-                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>Preventative</td>
-                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>Identified</td>
-                          <td className="px-3 py-1.5 max-w-xs truncate" style={{ color: "var(--text-secondary)" }} title={r.scopeOfWork}>{r.scopeOfWork || "—"}</td>
-                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{r.repairDate || "—"}</td>
-                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{woRef || "—"}</td>
-                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-secondary)" }}>{r.technician || "—"}</td>
-                          <td className="px-3 py-1.5 min-w-[260px] max-w-xs">
-                            {obs ? (
-                              <div
-                                className="max-h-20 overflow-hidden text-[10px] [&_strong]:font-semibold [&_p]:leading-snug"
-                                style={{ color: "var(--text-secondary)" }}
-                                // eslint-disable-next-line react/no-danger
-                                dangerouslySetInnerHTML={{ __html: obs }}
-                              />
-                            ) : (
-                              <span className="text-[10px]" style={{ color: "var(--text-label)" }}>—</span>
-                            )}
+                          {/* Type / Status — fixed */}
+                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-label)" }}>Preventative</td>
+                          <td className="px-3 py-1.5 whitespace-nowrap" style={{ color: "var(--text-label)" }}>Identified</td>
+                          {/* Editable record fields */}
+                          {recCell(r.scopeOfWork, "scopeOfWork", "Description")}
+                          {recCell(r.repairDate, "repairDate", "YYYY-MM-DD")}
+                          {recCell(woRef ? r.emrReference : "", "emrReference", "WO ref.")}
+                          {recCell(r.technician, "technician", "Technician")}
+                          {/* Observations — contenteditable */}
+                          <td className="px-2 py-1 min-w-[300px] max-w-sm align-top">
+                            <div
+                              key={`obs-${e.file.name}`}
+                              contentEditable
+                              suppressContentEditableWarning
+                              className="w-full rounded-lg border px-2 py-1.5 text-[10px] outline-none min-h-[40px] [&_strong]:font-semibold [&_p]:leading-snug [&_p]:my-0"
+                              style={{
+                                background: "var(--bg-input, var(--bg-surface))",
+                                borderColor: obs ? "var(--border-solid)" : "var(--border)",
+                                color: obs ? "var(--text-secondary)" : "var(--text-label)",
+                                whiteSpace: "normal",
+                              }}
+                              // eslint-disable-next-line react/no-danger
+                              dangerouslySetInnerHTML={{ __html: obs || '<p style="opacity:0.4">Click to edit observations…</p>' }}
+                              onFocus={(ev) => {
+                                ev.currentTarget.style.borderColor = "var(--accent)";
+                                if (!obs) ev.currentTarget.innerHTML = "";
+                              }}
+                              onBlur={(ev) => {
+                                const html = ev.currentTarget.innerHTML.trim();
+                                ev.currentTarget.style.borderColor = html ? "var(--border-solid)" : "var(--border)";
+                                applyEdit(e.file.name, { observationsHtml: html || undefined });
+                              }}
+                            />
                           </td>
                         </tr>
                       );
@@ -613,7 +841,7 @@ export default function ImportPage() {
                 </table>
               </div>
               <p className="mt-2 text-xs" style={{ color: "var(--text-label)" }}>
-                Read-only — edit values in the IRIS Asset table above. Observations are auto-built from scope + calibration data.
+                Observations are auto-built from scope + calibration data. Click the cell to edit — changes are included when you click + Train AI.
               </p>
             </div>
           </>

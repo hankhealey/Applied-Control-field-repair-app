@@ -200,6 +200,7 @@ const RELIEF_VALVE_HEADERS = [
 
 // Split "3-15" bench set string into [lower, upper]
 export function splitBenchSet(value: string): [string, string] {
+  if (!value) return ["", ""];
   const m = value.match(/^([0-9.]+)\s*[-–]\s*([0-9.]+)/);
   if (m) return [m[1], m[2]];
   return [value, ""];
