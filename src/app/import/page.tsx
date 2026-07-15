@@ -18,6 +18,9 @@ import {
   fetchAIRules,
   removeAIRule,
   RULE_MIN_CHARS,
+  RULE_SCOPES,
+  type RuleScope,
+  rulesForType,
   ruleTextsForPrompt,
 } from "@/lib/imports/aiRules";
 import { checkAiAvailable, enhanceWithAi } from "@/lib/imports/ollamaParser";
@@ -25,8 +28,11 @@ import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
 import {
   deleteTrainingExample,
   getTrainingExamples,
+  pickExamplesForType,
+  retagUntypedExamples,
   saveTrainingExample,
   type TrainingExample,
+  updateTrainingExampleType,
 } from "@/lib/imports/trainingExamples";
 
 type CsvCol = {
@@ -71,7 +77,12 @@ interface FileEntry {
   error?: string;
   result?: ParsedPdfReport;
   assetType: IrisAssetType;
+  /** What training was sent with the last AI enhancement of this file. */
+  training?: { examples: number; rules: number };
 }
+
+/** The 11 IRIS asset types, derived from RULE_SCOPES (minus "All"). */
+const ASSET_TYPES = RULE_SCOPES.filter((s): s is IrisAssetType => s !== "All");
 
 export default function ImportPage() {
   const { toast } = useToast();
@@ -90,6 +101,9 @@ export default function ImportPage() {
   const [rulesShared, setRulesShared] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [ruleDraft, setRuleDraft] = useState("");
+  const [ruleScope, setRuleScope] = useState<RuleScope>("All");
+  const [rulesFilter, setRulesFilter] = useState<RuleScope | "Everything">("Everything");
+  const [untypedTag, setUntypedTag] = useState<IrisAssetType>("Control Valve");
 
   useEffect(() => {
     checkAiAvailable().then(setAiAvailable);
@@ -112,22 +126,26 @@ export default function ImportPage() {
       ...prev,
       ...arr.map((f) => ({ file: f, status: "pending" as const, assetType: pendingType })),
     ]);
-    arr.forEach(parseFile);
+    arr.forEach((f) => parseFile(f, pendingType));
   }
 
   function setEntryAssetType(file: File, assetType: IrisAssetType) {
     setEntries((prev) => prev.map((e) => e.file === file ? { ...e, assetType } : e));
   }
 
-  async function parseFile(file: File) {
-    setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "parsing", statusMsg: "Extracting fields…" } : e));
+  async function parseFile(file: File, assetType: IrisAssetType) {
+    setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "parsing", statusMsg: "Extracting fields…", training: undefined } : e));
     try {
       let result = await parsePdfFile(file);
       if (useAi && aiAvailable) {
-        setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…" } : e));
+        // Type-scoped training: same-type examples first, rules for this type or "All"
+        const chosenExamples = pickExamplesForType(examples, assetType);
+        const scopedRules = rulesForType(rules, assetType);
+        const training = { examples: chosenExamples.length, rules: scopedRules.length };
+        setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…", training } : e));
         result = await enhanceWithAi(result, (msg) => {
           setEntries((prev) => prev.map((e) => (e.file === file ? { ...e, statusMsg: msg } : e)));
-        }, examples, ruleTextsForPrompt(rules));
+        }, chosenExamples, ruleTextsForPrompt(scopedRules));
       }
       setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "done", result, statusMsg: undefined } : e));
     } catch (err) {
@@ -148,9 +166,9 @@ export default function ImportPage() {
     const fields = Object.fromEntries(
       Object.entries(merged).filter(([k, v]) => !k.startsWith("_") && typeof v === "string" && v.trim()),
     ) as Record<string, string>;
-    const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText!, fields });
+    const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText!, fields, assetType: entry.assetType });
     setExamples((prev) => [...prev, saved]);
-    toast(`Training example saved — ${Object.keys(fields).length} fields`, "success");
+    toast(`${entry.assetType} training example saved — ${Object.keys(fields).length} fields`, "success");
 
     // E1: if the user corrected fields, pre-fill a rule suggestion in the chat log
     const edits = editing[entry.file.name];
@@ -166,6 +184,7 @@ export default function ImportPage() {
       }
       if (parts.length > 0) {
         setRuleDraft(`On reports like ${entry.file.name.replace(/\.pdf$/i, "")}, ${parts.join("; ")}. Rule: `);
+        setRuleScope(entry.assetType);
         setShowRules(true);
         toast("Tip: turn that correction into a rule below so the AI stops making it", "info");
       }
@@ -178,7 +197,7 @@ export default function ImportPage() {
   }
 
   async function addRule() {
-    const result = await addAIRule(ruleDraft);
+    const result = await addAIRule(ruleDraft, ruleScope);
     if ("error" in result) {
       toast(result.error, "error");
       return;
@@ -186,10 +205,11 @@ export default function ImportPage() {
     setRulesShared(result.shared);
     setRules((prev) => prev.some((r) => r.id === result.rule.id) ? prev : [...prev, result.rule]);
     setRuleDraft("");
+    const scopeLabel = ruleScope === "All" ? "all asset types" : `${ruleScope} extractions`;
     toast(
       result.shared
-        ? "Rule saved — shared with all users, applies to every AI extraction"
-        : "Rule saved to this browser — applies to every AI extraction here",
+        ? `Rule saved for ${scopeLabel} — shared with all users`
+        : `Rule saved for ${scopeLabel} — this browser only`,
       "success",
     );
   }
@@ -322,12 +342,61 @@ export default function ImportPage() {
             style={{ background: "var(--color-info-bg)", borderColor: "var(--color-info-border)" }}
           >
             <p className="mb-2 text-xs font-semibold" style={{ color: "var(--color-info-text)" }}>
-              Training Examples — included in every AI extraction
+              Training Examples — each trains extractions of its asset type
             </p>
+
+            {/* Bulk-tag banner for examples saved before type-scoping */}
+            {examples.some((ex) => !ex.assetType) && (
+              <div
+                className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-2 text-xs"
+                style={{ background: "var(--bg-card)", borderColor: "var(--color-info-border)", color: "var(--color-info-text)" }}
+              >
+                <span>
+                  {examples.filter((ex) => !ex.assetType).length} example
+                  {examples.filter((ex) => !ex.assetType).length !== 1 ? "s" : ""} from before type-scoping — tag them as:
+                </span>
+                <select
+                  value={untypedTag}
+                  onChange={(ev) => setUntypedTag(ev.target.value as IrisAssetType)}
+                  aria-label="Asset type to tag untyped examples with"
+                  className="rounded border px-1.5 py-0.5 text-xs"
+                  style={{ background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}
+                >
+                  {ASSET_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    const count = examples.filter((ex) => !ex.assetType).length;
+                    setExamples(retagUntypedExamples(untypedTag));
+                    toast(`Tagged ${count} example${count !== 1 ? "s" : ""} as ${untypedTag}`, "success");
+                  }}
+                >
+                  Apply
+                </Button>
+              </div>
+            )}
+
             <div className="flex flex-col gap-1">
               {examples.map((ex) => (
                 <div key={ex.id} className="flex items-center gap-2 text-xs" style={{ color: "var(--color-info-text)" }}>
                   <span className="flex-1 truncate">{ex.filename}</span>
+                  <select
+                    value={ex.assetType ?? "All"}
+                    onChange={(ev) => setExamples(updateTrainingExampleType(ex.id, ev.target.value))}
+                    aria-label={`Asset type for example ${ex.filename}`}
+                    title="Asset type this example trains"
+                    className="rounded border px-1.5 py-0.5 text-[10px]"
+                    style={{ background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}
+                  >
+                    <option value="All">All types</option>
+                    {ASSET_TYPES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                   <span style={{ opacity: 0.6 }}>{new Date(ex.savedAt).toLocaleDateString()}</span>
                   <button
                     type="button"
@@ -370,45 +439,115 @@ export default function ImportPage() {
                 </span>
               </div>
               <p className="mt-0.5 text-xs" style={{ color: "var(--text-label)" }}>
-                Tell the AI what it keeps getting wrong. Each message becomes a rule applied to every extraction.
+                Tell the AI what it keeps getting wrong. Rules apply to extractions of their asset type — &ldquo;All types&rdquo; rules apply everywhere.
               </p>
             </div>
 
-            {rules.length > 0 && (
-              <div className="flex flex-col gap-2 px-4 py-3 max-h-64 overflow-y-auto">
-                {rules.map((rule) => (
-                  <div key={rule.id} className="flex items-start gap-2 group">
-                    <div
-                      className="flex-1 rounded-lg rounded-tl-sm border px-3 py-2 text-xs leading-relaxed"
-                      style={{
-                        background: "var(--bg-surface)",
-                        borderColor: "var(--border)",
-                        color: "var(--text-primary)",
-                      }}
-                    >
-                      {rule.text}
-                      <span className="ml-2 text-[10px]" style={{ color: "var(--text-label)" }}>
-                        {new Date(rule.createdAt).toLocaleDateString()}
-                      </span>
+            {(() => {
+              const scopesWithRules = RULE_SCOPES.filter((s) => rules.some((r) => r.assetType === s));
+              const effectiveFilter =
+                rulesFilter !== "Everything" && !scopesWithRules.includes(rulesFilter) ? "Everything" : rulesFilter;
+              const visibleRules =
+                effectiveFilter === "Everything" ? rules : rules.filter((r) => r.assetType === effectiveFilter);
+              return (
+                <>
+                  {scopesWithRules.length > 1 && (
+                    <div className="flex flex-wrap gap-1.5 px-4 pt-3">
+                      {(["Everything", ...scopesWithRules] as (RuleScope | "Everything")[]).map((scope) => {
+                        const active = effectiveFilter === scope;
+                        const count = scope === "Everything" ? rules.length : rules.filter((r) => r.assetType === scope).length;
+                        return (
+                          <button
+                            key={scope}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => setRulesFilter(scope)}
+                            className="rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors"
+                            style={
+                              active
+                                ? { background: "var(--accent)", borderColor: "var(--accent)", color: "#fff" }
+                                : { background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }
+                            }
+                          >
+                            {scope === "Everything" ? "All rules" : scope === "All" ? "All types" : scope} {count}
+                          </button>
+                        );
+                      })}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeRule(rule.id)}
-                      title="Delete rule"
-                      className="mt-1.5 opacity-30 hover:opacity-100 hover:text-red-500 transition-opacity text-xs"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+                  )}
+
+                  {rules.length === 0 ? (
+                    <div className="px-4 py-5 text-center">
+                      <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                        No rules yet — teach the AI its first correction.
+                      </p>
+                      <p className="mt-1 text-xs" style={{ color: "var(--text-label)" }}>
+                        Pick an asset type below, describe the fix, and every future extraction of that type will obey it.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-2 px-4 py-3 max-h-64 overflow-y-auto">
+                      {visibleRules.map((rule) => (
+                        <div key={rule.id} className="flex items-start gap-2 group">
+                          <div
+                            className="flex-1 rounded-lg rounded-tl-sm border px-3 py-2 text-xs leading-relaxed"
+                            style={{
+                              background: "var(--bg-surface)",
+                              borderColor: "var(--border)",
+                              color: "var(--text-primary)",
+                            }}
+                          >
+                            <span
+                              className="mr-2 inline-block rounded-full border px-1.5 py-px text-[10px] font-medium align-middle"
+                              style={
+                                rule.assetType === "All"
+                                  ? { background: "var(--bg-card)", borderColor: "var(--border-solid)", color: "var(--text-label)" }
+                                  : { background: "var(--color-info-bg)", borderColor: "var(--color-info-border)", color: "var(--color-info-text)" }
+                              }
+                            >
+                              {rule.assetType === "All" ? "All types" : rule.assetType}
+                            </span>
+                            {rule.text}
+                            <span className="ml-2 text-[10px]" style={{ color: "var(--text-label)" }}>
+                              {new Date(rule.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeRule(rule.id)}
+                            title="Delete rule"
+                            className="mt-1.5 opacity-30 hover:opacity-100 hover:text-red-500 transition-opacity text-xs"
+                            style={{ color: "var(--text-secondary)" }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             <div
               className="flex items-end gap-2 px-4 py-3"
-              style={{ borderTop: rules.length > 0 ? "1px solid var(--border)" : undefined }}
+              style={{ borderTop: "1px solid var(--border)" }}
             >
+              <select
+                value={ruleScope}
+                onChange={(ev) => setRuleScope(ev.target.value as RuleScope)}
+                aria-label="Asset type this rule applies to"
+                className="shrink-0 rounded-lg border px-2 py-2 text-xs outline-none"
+                style={{
+                  background: "var(--bg-input, var(--bg-surface))",
+                  borderColor: "var(--border-solid)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {RULE_SCOPES.map((s) => (
+                  <option key={s} value={s}>{s === "All" ? "All types" : s}</option>
+                ))}
+              </select>
               <textarea
                 value={ruleDraft}
                 onChange={(ev) => setRuleDraft(ev.target.value)}
@@ -448,14 +587,14 @@ export default function ImportPage() {
             Each type uses a different IRIS column template. You can override per file below.
           </p>
           <div className="flex flex-wrap gap-2">
-            {(["Control Valve", "Relief Valve", "Isolation Valve", "Motor Operated Valve", "Manual Valve", "Regulator", "Steam Trap", "General", "Machinery", "Measurement", "Tank"] as IrisAssetType[]).map((type) => {
+            {ASSET_TYPES.map((type) => {
               const active = pendingType === type;
               return (
                 <button
                   key={type}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => setPendingType(type)}
+                  onClick={() => { setPendingType(type); setRuleScope(type); }}
                   className="rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
                   style={
                     active
@@ -536,6 +675,11 @@ export default function ImportPage() {
                         {w}
                       </p>
                     ))}
+                    {entry.training && (entry.status === "enhancing" || entry.status === "done") && (
+                      <p className="mt-0.5 text-xs" style={{ color: "var(--text-label)" }}>
+                        Trained with {entry.training.examples} {entry.assetType} example{entry.training.examples !== 1 ? "s" : ""} · {entry.training.rules} rule{entry.training.rules !== 1 ? "s" : ""}
+                      </p>
+                    )}
                   </div>
                   {(entry.status === "parsing" || entry.status === "enhancing") && (
                     <span className="text-xs font-medium animate-pulse whitespace-nowrap" style={{ color: "var(--accent)" }}>
@@ -562,24 +706,39 @@ export default function ImportPage() {
                     className="rounded border px-1.5 py-0.5 text-xs shrink-0"
                     style={{ background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}
                   >
-                    {(["Control Valve", "Relief Valve", "Isolation Valve", "Motor Operated Valve", "Manual Valve", "Regulator", "Steam Trap", "General", "Machinery", "Measurement", "Tank"] as IrisAssetType[]).map((t) => (
+                    {ASSET_TYPES.map((t) => (
                       <option key={t} value={t}>{t}</option>
                     ))}
                   </select>
                   {entry.status === "done" && (
-                    <button
-                      type="button"
-                      onClick={() => saveExample(entry)}
-                      title="Save as training example so AI learns from this report"
-                      className="rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap transition-colors"
-                      style={{
-                        borderColor: "var(--color-info-border)",
-                        color: "var(--color-info-text)",
-                        background: "var(--color-info-bg)",
-                      }}
-                    >
-                      + Train AI
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => parseFile(entry.file, entry.assetType)}
+                        title="Re-run extraction with the current rules and training examples"
+                        className="rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          borderColor: "var(--border-solid)",
+                          color: "var(--text-secondary)",
+                          background: "var(--bg-surface)",
+                        }}
+                      >
+                        ↻ Re-extract
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveExample(entry)}
+                        title="Save as training example so AI learns from this report"
+                        className="rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap transition-colors"
+                        style={{
+                          borderColor: "var(--color-info-border)",
+                          color: "var(--color-info-text)",
+                          background: "var(--color-info-bg)",
+                        }}
+                      >
+                        + Train AI
+                      </button>
+                    </>
                   )}
                   <button
                     type="button"

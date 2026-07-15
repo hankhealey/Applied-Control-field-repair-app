@@ -31,6 +31,8 @@ export interface SharedAIRule {
   id: string;
   text: string;
   createdAt: string;
+  /** Asset type scope ("All" or an IrisAssetType); legacy rules lack it. */
+  assetType?: string;
 }
 
 const rk = (token: string) => `req:${token}`;

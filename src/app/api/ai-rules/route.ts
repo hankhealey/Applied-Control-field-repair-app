@@ -4,6 +4,7 @@
 // the client falls back to localStorage.
 
 import type { NextRequest } from "next/server";
+import { RULE_SCOPES, type RuleScope } from "@/lib/imports/aiRules";
 import { kvStore, type SharedAIRule } from "@/lib/kv";
 
 const RULE_MIN_CHARS = 10;
@@ -20,7 +21,10 @@ export async function GET() {
   }
   try {
     const rules = (await kvStore.getAIRules()) ?? [];
-    return Response.json({ shared: true, rules });
+    return Response.json({
+      shared: true,
+      rules: rules.map((r) => ({ ...r, assetType: r.assetType ?? "All" })),
+    });
   } catch {
     return Response.json({ shared: false, rules: [] });
   }
@@ -31,7 +35,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Shared storage not configured" }, { status: 503 });
   }
 
-  let body: { text?: string };
+  let body: { text?: string; assetType?: string };
   try {
     body = await req.json();
   } catch {
@@ -45,6 +49,10 @@ export async function POST(req: NextRequest) {
   if (text.length > RULE_MAX_CHARS) {
     return Response.json({ error: `Rule must be under ${RULE_MAX_CHARS} characters` }, { status: 400 });
   }
+  const assetType = body.assetType ?? "All";
+  if (!RULE_SCOPES.includes(assetType as RuleScope)) {
+    return Response.json({ error: "Invalid asset type" }, { status: 400 });
+  }
 
   try {
     const rules = (await kvStore.getAIRules()) ?? [];
@@ -52,14 +60,15 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Rule limit reached — delete old rules first" }, { status: 400 });
     }
     // Skip exact duplicates so two users adding the same correction don't double it
-    const existing = rules.find((r) => r.text === text);
+    const existing = rules.find((r) => r.text === text && (r.assetType ?? "All") === assetType);
     if (existing) {
-      return Response.json({ rule: existing, duplicate: true });
+      return Response.json({ rule: { ...existing, assetType: existing.assetType ?? "All" }, duplicate: true });
     }
     const rule: SharedAIRule = {
       id: crypto.randomUUID(),
       text,
       createdAt: new Date().toISOString(),
+      assetType,
     };
     await kvStore.setAIRules([...rules, rule]);
     return Response.json({ rule });
