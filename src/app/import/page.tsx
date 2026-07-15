@@ -8,6 +8,8 @@ import {
   buildObservationsHtml,
   exportIrisCsvFromParsed,
   exportRecordsCsvFromParsed,
+  irisColumnsFor,
+  irisPreviewRow,
   splitBenchSet,
   splitModelSize,
   type IrisAssetType,
@@ -23,8 +25,10 @@ import {
   rulesForType,
   ruleTextsForPrompt,
 } from "@/lib/imports/aiRules";
+import { applyEditPatch, type EditPatch } from "@/lib/imports/editOverrides";
 import { checkAiAvailable, enhanceWithAi } from "@/lib/imports/ollamaParser";
 import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
+import { blankFieldsForRules, enforceBlankFields } from "@/lib/imports/ruleActions";
 import {
   deleteTrainingExample,
   getTrainingExamples,
@@ -37,37 +41,42 @@ import {
 
 type CsvCol = {
   header: string;
-  getValue: (r: ParsedPdfReport) => string;
-  onEdit: (current: ParsedPdfReport, v: string) => Partial<ParsedPdfReport>;
+  /** r is the merged result; p is the raw edit patch (split-cell overrides live there). */
+  getValue: (r: ParsedPdfReport, p: EditPatch) => string;
+  onEdit: (current: ParsedPdfReport, p: EditPatch, v: string) => EditPatch;
 };
 
+// Split cells (model/size, bench set) write _-prefixed overrides instead of
+// re-joining the combined field per keystroke — the join happens once in
+// applyEditPatch. On first edit the sibling half is snapshotted so later
+// keystrokes are plain text edits with no feedback loop.
 const CSV_COLS: CsvCol[] = [
-  { header: "Tag",                              getValue: r => r.tagOrUnit,                                    onEdit: (_, v) => ({ tagOrUnit: v }) },
-  { header: "Service description",              getValue: r => r.scopeOfWork,                                  onEdit: (_, v) => ({ scopeOfWork: v }) },
-  { header: "P & ID no.",                       getValue: r => r.emrReference,                                 onEdit: (_, v) => ({ emrReference: v }) },
-  { header: "Datasheet no.",                    getValue: r => r.crmodReference,                               onEdit: (_, v) => ({ crmodReference: v }) },
-  { header: "Valve manufacturer",               getValue: r => r.valveMake,                                    onEdit: (_, v) => ({ valveMake: v }) },
-  { header: "Valve model",                      getValue: r => splitModelSize(r.valveModelSize).model,         onEdit: (r, v) => ({ valveModelSize: [v, splitModelSize(r.valveModelSize).size].filter(Boolean).join(" ") }) },
-  { header: "Valve serial number",              getValue: r => r.valveSerialNumber,                            onEdit: (_, v) => ({ valveSerialNumber: v }) },
-  { header: "Valve size",                       getValue: r => splitModelSize(r.valveModelSize).size,          onEdit: (r, v) => ({ valveModelSize: [splitModelSize(r.valveModelSize).model, v].filter(Boolean).join(" ") }) },
-  { header: "Valve pressure class",             getValue: r => r.valveClassConnection,                         onEdit: (_, v) => ({ valveClassConnection: v }) },
-  { header: "Valve rated travel",               getValue: r => r.ratedTravel,                                  onEdit: (_, v) => ({ ratedTravel: v }) },
-  { header: "Valve leak class",                 getValue: r => r.seatLeakClass,                                onEdit: (_, v) => ({ seatLeakClass: v }) },
-  { header: "Valve trim style/number",          getValue: r => r.valveTrimCharPort,                            onEdit: (_, v) => ({ valveTrimCharPort: v }) },
-  { header: "Valve packing type/material",      getValue: r => r.valvePackingConfiguration,                    onEdit: (_, v) => ({ valvePackingConfiguration: v }) },
-  { header: "Valve flow direction",             getValue: r => r.valveFlowDirection,                           onEdit: (_, v) => ({ valveFlowDirection: v }) },
-  { header: "Actuator manufacturer",            getValue: r => r.actuatorMake,                                 onEdit: (_, v) => ({ actuatorMake: v }) },
-  { header: "Actuator model",                   getValue: r => splitModelSize(r.actuatorModelSize).model,      onEdit: (r, v) => ({ actuatorModelSize: [v, splitModelSize(r.actuatorModelSize).size].filter(Boolean).join(" ") }) },
-  { header: "Actuator size",                    getValue: r => splitModelSize(r.actuatorModelSize).size,       onEdit: (r, v) => ({ actuatorModelSize: [splitModelSize(r.actuatorModelSize).model, v].filter(Boolean).join(" ") }) },
-  { header: "Actuator serial number",           getValue: r => r.actuatorSerialNumber,                         onEdit: (_, v) => ({ actuatorSerialNumber: v }) },
-  { header: "Actuator lower bench set",         getValue: r => splitBenchSet(r.benchSetAsLeft)[0],             onEdit: (r, v) => ({ benchSetAsLeft: [v, splitBenchSet(r.benchSetAsLeft)[1]].filter(Boolean).join("-") }) },
-  { header: "Actuator upper bench set",         getValue: r => splitBenchSet(r.benchSetAsLeft)[1],             onEdit: (r, v) => ({ benchSetAsLeft: [splitBenchSet(r.benchSetAsLeft)[0], v].filter(Boolean).join("-") }) },
-  { header: "Actuator nominal supply pressure", getValue: r => r.supplyPressureAsLeft,                         onEdit: (_, v) => ({ supplyPressureAsLeft: v }) },
-  { header: "Actuator fail action",             getValue: r => r.failActionAsLeft,                             onEdit: (_, v) => ({ failActionAsLeft: v }) },
-  { header: "Actuator air",                     getValue: r => r.actuatorAirAction,                            onEdit: (_, v) => ({ actuatorAirAction: v }) },
-  { header: "Device 1 Manufacturer",            getValue: r => r.positionerMake,                               onEdit: (_, v) => ({ positionerMake: v }) },
-  { header: "Device 1 Model number",            getValue: r => r.positionerModelAction,                        onEdit: (_, v) => ({ positionerModelAction: v }) },
-  { header: "Device 1 Serial number",           getValue: r => r.positionerSerialNumber,                       onEdit: (_, v) => ({ positionerSerialNumber: v }) },
+  { header: "Tag",                              getValue: r => r.tagOrUnit,                                    onEdit: (_, _p, v) => ({ tagOrUnit: v }) },
+  { header: "Service description",              getValue: r => r.scopeOfWork,                                  onEdit: (_, _p, v) => ({ scopeOfWork: v }) },
+  { header: "P & ID no.",                       getValue: r => r.emrReference,                                 onEdit: (_, _p, v) => ({ emrReference: v }) },
+  { header: "Datasheet no.",                    getValue: r => r.crmodReference,                               onEdit: (_, _p, v) => ({ crmodReference: v }) },
+  { header: "Valve manufacturer",               getValue: r => r.valveMake,                                    onEdit: (_, _p, v) => ({ valveMake: v }) },
+  { header: "Valve model",                      getValue: (r, p) => p._valveModel ?? splitModelSize(r.valveModelSize).model,       onEdit: (r, p, v) => ({ _valveModel: v, _valveSize: p._valveSize ?? splitModelSize(r.valveModelSize).size }) },
+  { header: "Valve serial number",              getValue: r => r.valveSerialNumber,                            onEdit: (_, _p, v) => ({ valveSerialNumber: v }) },
+  { header: "Valve size",                       getValue: (r, p) => p._valveSize ?? splitModelSize(r.valveModelSize).size,         onEdit: (r, p, v) => ({ _valveSize: v, _valveModel: p._valveModel ?? splitModelSize(r.valveModelSize).model }) },
+  { header: "Valve pressure class",             getValue: r => r.valveClassConnection,                         onEdit: (_, _p, v) => ({ valveClassConnection: v }) },
+  { header: "Valve rated travel",               getValue: r => r.ratedTravel,                                  onEdit: (_, _p, v) => ({ ratedTravel: v }) },
+  { header: "Valve leak class",                 getValue: r => r.seatLeakClass,                                onEdit: (_, _p, v) => ({ seatLeakClass: v }) },
+  { header: "Valve trim style/number",          getValue: r => r.valveTrimCharPort,                            onEdit: (_, _p, v) => ({ valveTrimCharPort: v }) },
+  { header: "Valve packing type/material",      getValue: r => r.valvePackingConfiguration,                    onEdit: (_, _p, v) => ({ valvePackingConfiguration: v }) },
+  { header: "Valve flow direction",             getValue: r => r.valveFlowDirection,                           onEdit: (_, _p, v) => ({ valveFlowDirection: v }) },
+  { header: "Actuator manufacturer",            getValue: r => r.actuatorMake,                                 onEdit: (_, _p, v) => ({ actuatorMake: v }) },
+  { header: "Actuator model",                   getValue: (r, p) => p._actuatorModel ?? splitModelSize(r.actuatorModelSize).model, onEdit: (r, p, v) => ({ _actuatorModel: v, _actuatorSize: p._actuatorSize ?? splitModelSize(r.actuatorModelSize).size }) },
+  { header: "Actuator size",                    getValue: (r, p) => p._actuatorSize ?? splitModelSize(r.actuatorModelSize).size,   onEdit: (r, p, v) => ({ _actuatorSize: v, _actuatorModel: p._actuatorModel ?? splitModelSize(r.actuatorModelSize).model }) },
+  { header: "Actuator serial number",           getValue: r => r.actuatorSerialNumber,                         onEdit: (_, _p, v) => ({ actuatorSerialNumber: v }) },
+  { header: "Actuator lower bench set",         getValue: (r, p) => p._benchLow ?? splitBenchSet(r.benchSetAsLeft)[0],             onEdit: (r, p, v) => ({ _benchLow: v, _benchHigh: p._benchHigh ?? splitBenchSet(r.benchSetAsLeft)[1] }) },
+  { header: "Actuator upper bench set",         getValue: (r, p) => p._benchHigh ?? splitBenchSet(r.benchSetAsLeft)[1],            onEdit: (r, p, v) => ({ _benchHigh: v, _benchLow: p._benchLow ?? splitBenchSet(r.benchSetAsLeft)[0] }) },
+  { header: "Actuator nominal supply pressure", getValue: r => r.supplyPressureAsLeft,                         onEdit: (_, _p, v) => ({ supplyPressureAsLeft: v }) },
+  { header: "Actuator fail action",             getValue: r => r.failActionAsLeft,                             onEdit: (_, _p, v) => ({ failActionAsLeft: v }) },
+  { header: "Actuator air",                     getValue: r => r.actuatorAirAction,                            onEdit: (_, _p, v) => ({ actuatorAirAction: v }) },
+  { header: "Device 1 Manufacturer",            getValue: r => r.positionerMake,                               onEdit: (_, _p, v) => ({ positionerMake: v }) },
+  { header: "Device 1 Model number",            getValue: r => r.positionerModelAction,                        onEdit: (_, _p, v) => ({ positionerModelAction: v }) },
+  { header: "Device 1 Serial number",           getValue: r => r.positionerSerialNumber,                       onEdit: (_, _p, v) => ({ positionerSerialNumber: v }) },
 ];
 
 interface FileEntry {
@@ -87,7 +96,11 @@ const ASSET_TYPES = RULE_SCOPES.filter((s): s is IrisAssetType => s !== "All");
 export default function ImportPage() {
   const { toast } = useToast();
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [editing, setEditing] = useState<Record<string, Partial<ParsedPdfReport>>>({});
+  const [editing, setEditing] = useState<Record<string, EditPatch>>({});
+  // Hand-entered values for IRIS columns not backed by a structured field,
+  // keyed by filename → column header. Overlaid onto the CSV export.
+  const [extraColumns, setExtraColumns] = useState<Record<string, Record<string, string>>>({});
+  const [showAllColumns, setShowAllColumns] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -137,16 +150,19 @@ export default function ImportPage() {
     setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "parsing", statusMsg: "Extracting fields…", training: undefined } : e));
     try {
       let result = await parsePdfFile(file);
+      // Type-scoped training: rules for this type or "All"
+      const scopedRules = rulesForType(rules, assetType);
       if (useAi && aiAvailable) {
-        // Type-scoped training: same-type examples first, rules for this type or "All"
         const chosenExamples = pickExamplesForType(examples, assetType);
-        const scopedRules = rulesForType(rules, assetType);
         const training = { examples: chosenExamples.length, rules: scopedRules.length };
         setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…", training } : e));
         result = await enhanceWithAi(result, (msg) => {
           setEntries((prev) => prev.map((e) => (e.file === file ? { ...e, statusMsg: msg } : e)));
         }, chosenExamples, ruleTextsForPrompt(scopedRules));
       }
+      // Deterministic enforcement: "leave X blank" rules clear fields the AI
+      // and regex parser can't un-fill (empty AI answers never overwrite)
+      result = enforceBlankFields(result, blankFieldsForRules(scopedRules.map((r) => r.text)));
       setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "done", result, statusMsg: undefined } : e));
     } catch (err) {
       setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "error", error: String(err), statusMsg: undefined } : e));
@@ -223,28 +239,36 @@ export default function ImportPage() {
     setRules((prev) => prev.filter((r) => r.id !== id));
   }
 
-  function applyEdit(filename: string, patch: Partial<ParsedPdfReport>) {
+  function applyEdit(filename: string, patch: EditPatch) {
     setEditing((prev) => ({ ...prev, [filename]: { ...(prev[filename] ?? {}), ...patch } }));
+  }
+
+  function applyExtraEdit(filename: string, header: string, value: string) {
+    setExtraColumns((prev) => ({ ...prev, [filename]: { ...(prev[filename] ?? {}), [header]: value } }));
   }
 
   function getMergedResult(entry: FileEntry): ParsedPdfReport | undefined {
     if (!entry.result) return undefined;
-    return { ...entry.result, ...(editing[entry.file.name] ?? {}) };
+    return applyEditPatch(entry.result, editing[entry.file.name] ?? {});
   }
 
   const doneEntries = entries.filter((e) => e.status === "done");
   const mergedResults = doneEntries.map((e) => getMergedResult(e)).filter((r): r is ParsedPdfReport => r !== undefined);
 
-  // Group done entries by asset type for Assets CSV export
-  const byType = doneEntries.reduce<Record<IrisAssetType, ParsedPdfReport[]>>(
-    (acc, e) => {
-      const r = getMergedResult(e);
-      if (r) acc[e.assetType].push(r);
-      return acc;
-    },
-    { "Control Valve": [], "Relief Valve": [], "Isolation Valve": [], "Motor Operated Valve": [], "Manual Valve": [], "Regulator": [], "Steam Trap": [], "General": [], "Machinery": [], "Measurement": [], "Tank": [] },
-  );
-  const typesPresent = (Object.keys(byType) as IrisAssetType[]).filter((t) => byType[t].length > 0);
+  // Asset types present, in first-seen order, for grouped Assets CSV export
+  const typesPresent = doneEntries.reduce<IrisAssetType[]>((acc, e) => {
+    if (!acc.includes(e.assetType)) acc.push(e.assetType);
+    return acc;
+  }, []);
+
+  // The table renders one column set; use the first done entry's type as its
+  // template (batches are almost always a single asset type).
+  const tableType: IrisAssetType = doneEntries[0]?.assetType ?? "Control Valve";
+  const allColumnLabels = irisColumnsFor(tableType);
+  const mappedByHeader = new Map(CSV_COLS.map((c) => [c.header, c]));
+  const displayColumns: Array<{ label: string; col?: CsvCol }> = showAllColumns
+    ? allColumnLabels.map((label) => ({ label, col: mappedByHeader.get(label) }))
+    : CSV_COLS.map((c) => ({ label: c.header, col: c }));
 
   function exportLabel() {
     if (mergedResults.length === 1) return mergedResults[0].tagOrUnit || "import";
@@ -253,7 +277,12 @@ export default function ImportPage() {
 
   function exportAllAssets() {
     for (const t of typesPresent) {
-      exportIrisCsvFromParsed(byType[t], t);
+      const entriesOfType = doneEntries.filter((e) => e.assetType === t);
+      const reports = entriesOfType
+        .map(getMergedResult)
+        .filter((r): r is ParsedPdfReport => r !== undefined);
+      const extras = entriesOfType.map((e) => extraColumns[e.file.name]);
+      exportIrisCsvFromParsed(reports, t, extras);
     }
   }
 
@@ -558,7 +587,7 @@ export default function ImportPage() {
                   }
                 }}
                 rows={2}
-                placeholder='e.g. "Never include the manufacturer name in the valve model field"'
+                placeholder='e.g. "Never include the manufacturer name in the valve model field" or "Leave Service description blank"'
                 className="flex-1 resize-none rounded-lg border px-3 py-2 text-xs outline-none"
                 style={{
                   background: "var(--bg-input, var(--bg-surface))",
@@ -759,9 +788,25 @@ export default function ImportPage() {
           <>
             <div className="mb-5">
               <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
-                <h2 className="label-sm">
-                  Extracted Data — review and correct before exporting
-                </h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="label-sm">
+                    Extracted Data — review and correct before exporting
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllColumns((v) => !v)}
+                    aria-pressed={showAllColumns}
+                    className="rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors"
+                    style={
+                      showAllColumns
+                        ? { background: "var(--accent)", borderColor: "var(--accent)", color: "#fff" }
+                        : { background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }
+                    }
+                    title={showAllColumns ? "Show only the key extracted columns" : `Show all ${allColumnLabels.length} IRIS columns for ${tableType}`}
+                  >
+                    {showAllColumns ? `Showing all ${allColumnLabels.length} columns` : `Show all ${allColumnLabels.length} columns`}
+                  </button>
+                </div>
                 <div className="flex items-center gap-2">
                   <Button
                     variant="secondary"
@@ -812,13 +857,15 @@ export default function ImportPage() {
                       >
                         File
                       </th>
-                      {CSV_COLS.map((col) => (
+                      {displayColumns.map(({ label, col }) => (
                         <th
-                          key={col.header}
+                          key={label}
                           className="px-3 py-2 text-left font-semibold min-w-[140px] whitespace-nowrap"
-                          style={{ color: "var(--text-label)" }}
+                          style={{ color: col ? "var(--text-label)" : "var(--text-secondary)" }}
+                          title={col ? undefined : "Extra IRIS column — not auto-extracted; fill by hand to include in the export"}
                         >
-                          {col.header}
+                          {label}
+                          {!col && <span aria-hidden className="ml-1" style={{ opacity: 0.5 }}>+</span>}
                         </th>
                       ))}
                     </tr>
@@ -826,6 +873,12 @@ export default function ImportPage() {
                   <tbody>
                     {doneEntries.map((e, rowIdx) => {
                       const merged = getMergedResult(e);
+                      const patch = editing[e.file.name] ?? {};
+                      const rowExtras = extraColumns[e.file.name] ?? {};
+                      // Live export values for unmapped columns (only needed in full view)
+                      const previewByHeader = showAllColumns && merged
+                        ? new Map(irisPreviewRow(merged, e.assetType).map((p) => [p.header, p.value]))
+                        : null;
                       return (
                         <tr
                           key={e.file.name}
@@ -841,22 +894,28 @@ export default function ImportPage() {
                           >
                             {e.file.name.replace(/\.pdf$/i, "")}
                           </td>
-                          {CSV_COLS.map((col) => {
-                            const val = merged ? col.getValue(merged) : "";
+                          {displayColumns.map(({ label, col }) => {
+                            const isMapped = Boolean(col);
+                            const val = col
+                              ? (merged ? col.getValue(merged, patch) : "")
+                              : (rowExtras[label] ?? previewByHeader?.get(label) ?? "");
+                            const onChange = col
+                              ? (v: string) => merged && applyEdit(e.file.name, col.onEdit(merged, patch, v))
+                              : (v: string) => applyExtraEdit(e.file.name, label, v);
                             return (
-                              <td key={col.header} className="px-2 py-1">
+                              <td key={label} className="px-2 py-1">
                                 <input
                                   type="text"
                                   value={val}
-                                  onChange={(ev) => merged && applyEdit(e.file.name, col.onEdit(merged, ev.target.value))}
+                                  onChange={(ev) => onChange(ev.target.value)}
                                   className="w-full rounded-lg border px-2 py-1 text-xs outline-none"
                                   style={{
-                                    background: "var(--bg-input, var(--bg-surface))",
+                                    background: isMapped ? "var(--bg-input, var(--bg-surface))" : "var(--bg-surface)",
                                     borderColor: val ? "var(--border-solid)" : "var(--border)",
                                     color: val ? "var(--text-primary)" : "var(--text-label)",
                                   }}
-                                  onFocus={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-                                  onBlur={(e) => (e.currentTarget.style.borderColor = val ? "var(--border-solid)" : "var(--border)")}
+                                  onFocus={(ev) => (ev.currentTarget.style.borderColor = "var(--accent)")}
+                                  onBlur={(ev) => (ev.currentTarget.style.borderColor = val ? "var(--border-solid)" : "var(--border)")}
                                   placeholder="—"
                                 />
                               </td>
@@ -869,7 +928,10 @@ export default function ImportPage() {
                 </table>
               </div>
               <p className="mt-2 text-xs" style={{ color: "var(--text-label)" }}>
-                Column headers match the IRIS CSV exactly. Click any cell to correct before exporting.
+                Column headers match the IRIS CSV exactly.{" "}
+                {showAllColumns
+                  ? `Showing all ${allColumnLabels.length} ${tableType} columns — cells marked + aren't auto-extracted; hand-filled values are included in the export.`
+                  : "Click any cell to correct before exporting."}
               </p>
             </div>
 

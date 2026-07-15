@@ -634,25 +634,63 @@ function assetTypeSuffix(t: IrisAssetType): string {
   return map[t] ?? "";
 }
 
-function buildCsv(reports: RepairReport[], assetType: IrisAssetType = "Control Valve"): string {
-  const cfg: Record<IrisAssetType, { headers: string[]; statusCols: Set<number>; toRow: (r: RepairReport) => string[] }> = {
-    "Control Valve":       { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToRow },
-    "Isolation Valve":     { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToIsolationValveRow },
-    "Motor Operated Valve":{ headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToMotorOperatedValveRow },
-    "Relief Valve":        { headers: RELIEF_VALVE_HEADERS, statusCols: STATUS_COLS_RV,   toRow: reportToReliefValveRow },
-    "Manual Valve":        { headers: MANUAL_VALVE_HEADERS, statusCols: STATUS_COLS_MV,   toRow: reportToManualValveRow },
-    "Regulator":           { headers: REGULATOR_HEADERS,    statusCols: STATUS_COLS_REG,  toRow: reportToRegulatorRow },
-    "Steam Trap":          { headers: STEAM_TRAP_HEADERS,   statusCols: STATUS_COLS_ST,   toRow: reportToSteamTrapRow },
-    "General":             { headers: GENERAL_HEADERS,      statusCols: STATUS_COLS_GEN,  toRow: reportToGeneralRow },
-    "Machinery":           { headers: MACHINERY_HEADERS,    statusCols: STATUS_COLS_MACH, toRow: reportToMachineryRow },
-    "Measurement":         { headers: MEASUREMENT_HEADERS,  statusCols: STATUS_COLS_MEAS, toRow: reportToMeasurementRow },
-    "Tank":                { headers: TANK_HEADERS,         statusCols: STATUS_COLS_TANK, toRow: reportToTankRow },
-  };
-  const { headers, statusCols, toRow } = cfg[assetType];
+// Per-asset-type CSV config: full column template, status (unquoted) columns,
+// and the row builder. Shared by buildCsv and the preview/column helpers.
+const ASSET_CFG: Record<IrisAssetType, { headers: string[]; statusCols: Set<number>; toRow: (r: RepairReport) => string[] }> = {
+  "Control Valve":       { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToRow },
+  "Isolation Valve":     { headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToIsolationValveRow },
+  "Motor Operated Valve":{ headers: HEADERS,              statusCols: STATUS_COLS_CV,   toRow: reportToMotorOperatedValveRow },
+  "Relief Valve":        { headers: RELIEF_VALVE_HEADERS, statusCols: STATUS_COLS_RV,   toRow: reportToReliefValveRow },
+  "Manual Valve":        { headers: MANUAL_VALVE_HEADERS, statusCols: STATUS_COLS_MV,   toRow: reportToManualValveRow },
+  "Regulator":           { headers: REGULATOR_HEADERS,    statusCols: STATUS_COLS_REG,  toRow: reportToRegulatorRow },
+  "Steam Trap":          { headers: STEAM_TRAP_HEADERS,   statusCols: STATUS_COLS_ST,   toRow: reportToSteamTrapRow },
+  "General":             { headers: GENERAL_HEADERS,      statusCols: STATUS_COLS_GEN,  toRow: reportToGeneralRow },
+  "Machinery":           { headers: MACHINERY_HEADERS,    statusCols: STATUS_COLS_MACH, toRow: reportToMachineryRow },
+  "Measurement":         { headers: MEASUREMENT_HEADERS,  statusCols: STATUS_COLS_MEAS, toRow: reportToMeasurementRow },
+  "Tank":                { headers: TANK_HEADERS,         statusCols: STATUS_COLS_TANK, toRow: reportToTankRow },
+};
+
+/** Strip the leading tab IRIS prepends to every header for display/lookup. */
+const cleanHeader = (h: string): string => h.replace(/^\t/, "");
+
+/** Ordered, display-clean column labels for an asset type's IRIS template. */
+export function irisColumnsFor(assetType: IrisAssetType = "Control Valve"): string[] {
+  return ASSET_CFG[assetType].headers.map(cleanHeader);
+}
+
+/**
+ * The full CSV row a parsed report would export as, zipped with clean headers.
+ * Lets the import page show every column (mapped + blank) with its live value.
+ */
+export function irisPreviewRow(
+  parsed: ParsedPdfReport,
+  assetType: IrisAssetType = "Control Valve",
+): Array<{ header: string; value: string }> {
+  const { headers, toRow } = ASSET_CFG[assetType];
+  const cells = toRow(parsedToReport(parsed));
+  return headers.map((h, i) => ({ header: cleanHeader(h), value: String(cells[i] ?? "") }));
+}
+
+function buildCsv(
+  reports: RepairReport[],
+  assetType: IrisAssetType = "Control Valve",
+  extras?: Array<Record<string, string> | undefined>,
+): string {
+  const { headers, statusCols, toRow } = ASSET_CFG[assetType];
+  const labelToIndex = new Map(headers.map((h, i) => [cleanHeader(h), i]));
 
   const headerLine = headers.map((h) => `"${h}"`).join(",");
-  const dataLines = reports.map((r) => {
+  const dataLines = reports.map((r, rIdx) => {
     const cells = toRow(r);
+    // Overlay hand-entered "extra column" values by header label. Presence of
+    // a key (even "") wins, so the user can fill blanks or clear a cell.
+    const ex = extras?.[rIdx];
+    if (ex) {
+      for (const [label, val] of Object.entries(ex)) {
+        const idx = labelToIndex.get(label);
+        if (idx !== undefined) cells[idx] = val;
+      }
+    }
     return cells
       .map((value, colIdx) => {
         const s = String(value ?? "");
@@ -764,6 +802,7 @@ function parsedToReport(p: ParsedPdfReport): RepairReport {
 export function exportIrisCsvFromParsed(
   parsed: ParsedPdfReport[],
   assetType: IrisAssetType = "Control Valve",
+  extras?: Array<Record<string, string> | undefined>,
 ): void {
   if (!parsed.length) throw new Error("No parsed reports");
   const reports = parsed.map(parsedToReport);
@@ -772,7 +811,7 @@ export function exportIrisCsvFromParsed(
     parsed.length === 1
       ? `${parsed[0].tagOrUnit || "import"}${suffix}-iris.csv`
       : `pdf-iris-export${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
-  triggerDownload(filename, buildCsv(reports, assetType));
+  triggerDownload(filename, buildCsv(reports, assetType, extras));
 }
 
 /** Export multiple reports as an IRIS-compatible CSV (one row per report) */
