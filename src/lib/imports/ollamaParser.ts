@@ -157,6 +157,10 @@ export async function enhanceWithAi(
         fields: PDF_FIELDS.map((f) => ({ key: f.key, desc: f.desc })),
         examples,
         rules,
+        // One call returns fields AND the observations block. Previously the
+        // prose was a second request that re-sent the same document to the 70b
+        // model — the document is now read once, on the roomier 8b limit.
+        withObservations: true,
       }),
       signal: AbortSignal.timeout(35_000),
     });
@@ -165,12 +169,19 @@ export async function enhanceWithAi(
       const err = (await res.json().catch(() => ({ error: "unknown" }))) as {
         error?: string;
       };
+      // A rate limit means the model never saw the text — rules and training
+      // examples did NOT apply. Never fail silently here: the regex-only result
+      // looks identical to a successful run.
+      const raw = `${err.error ?? ""} ${res.status}`;
+      const rateLimited = res.status === 429 || /rate.?limit|429|too many requests/i.test(raw);
+      const message = rateLimited
+        ? "Rate limit hit — AI skipped, so your rules did NOT apply. Wait ~60s and re-extract."
+        : `AI error: ${err.error ?? res.status}`;
+      onProgress?.(message);
       return {
         ...parsed,
-        _warnings: [
-          ...(parsed._warnings ?? []),
-          `AI error: ${err.error ?? res.status}`,
-        ],
+        _aiError: message,
+        _warnings: [...(parsed._warnings ?? []), message],
       };
     }
 
@@ -201,34 +212,33 @@ export async function enhanceWithAi(
       enhanced.positionerMake,
     );
 
+    // Observations come back from the SAME call as the fields (withObservations),
+    // so the report is read once. A second request to the 70b prose model used
+    // to re-send the whole document and blew its ~6k tokens/min ceiling after
+    // ~2 files, which rate-limited extraction itself. The 70b path still exists
+    // behind the on-demand "Write with AI" button when prose quality matters.
+    const obs = typeof extracted.observationsHtml === "string" ? extracted.observationsHtml.trim() : "";
+    if (obs) enhanced.observationsHtml = obs;
+
     enhanced._warnings = [
       ...(parsed._warnings ?? []),
-      `AI extracted ${filled.length} field(s)`,
+      `AI extracted ${filled.length} field(s)${obs ? " + observations" : ""}`,
     ];
 
-    onProgress?.(`✓ AI extracted ${filled.length} field(s) — generating observations…`);
-
-    // Second Groq call: generate the full Observations HTML block
-    const obsHtml = await generateObservationsHtml(rawText);
-    if (obsHtml) {
-      enhanced.observationsHtml = obsHtml;
-      onProgress?.("✓ Observations generated");
-    } else {
-      onProgress?.(
-        filled.length > 0
-          ? `✓ AI filled ${filled.length} field(s)`
-          : "AI found no additional data",
-      );
-    }
+    onProgress?.(
+      filled.length > 0
+        ? `✓ AI filled ${filled.length} field(s)${obs ? " + observations" : ""}`
+        : "AI found no additional data",
+    );
 
     return enhanced;
   } catch (err) {
+    const message = `AI: ${err instanceof Error ? err.message : String(err)}`;
+    onProgress?.(message);
     return {
       ...parsed,
-      _warnings: [
-        ...(parsed._warnings ?? []),
-        `AI: ${err instanceof Error ? err.message : String(err)}`,
-      ],
+      _aiError: message,
+      _warnings: [...(parsed._warnings ?? []), message],
     };
   }
 }

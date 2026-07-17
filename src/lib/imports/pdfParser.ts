@@ -41,6 +41,16 @@ export interface ParsedPdfReport {
   _warnings?: string[];
   // Raw text for Ollama enhancement pass
   _rawText?: string;
+  // Set when the AI pass failed — the result is regex-only, so user rules and
+  // training examples never reached the model. Surfaced in the UI with a retry.
+  // Kept a string (not a boolean flag) so the all-string casts in this file
+  // still type-check; use isRateLimit() to classify it.
+  _aiError?: string;
+}
+
+/** True when an _aiError came from a provider rate limit rather than a real fault. */
+export function isRateLimit(aiError: string | undefined): boolean {
+  return Boolean(aiError && /rate.?limit|429|too many requests/i.test(aiError));
 }
 
 interface TItem {
@@ -146,6 +156,92 @@ const EQUIPMENT_FIELDS = new Set<EquipKey>([
   "positionerModelAction",
 ]);
 
+/**
+ * Fields where a bare number is never a real value — a manufacturer is not
+ * "667", a flow direction is not "2". These stay under the strict rule.
+ */
+const NEVER_NUMERIC_FIELDS = new Set<EquipKey>([
+  "valveMake",
+  "actuatorMake",
+  "positionerMake",
+  "valveFlowDirection",
+  "actuatorActionHandwheel",
+]);
+
+/**
+ * What the number-only check is actually defending against: findings lists
+ * number their items ("1.", "2.", "12.") and those leak into equipment fields.
+ *
+ * Everything else numeric must be LEFT ALONE. Fisher actuator models are bare
+ * numbers (667, 657, 1052, 585), positioners too (3582), and serials are often
+ * all digits. Rejecting every numeric value deleted all of them on every file.
+ */
+const FINDINGS_ITEM_NUMBER = /^\d{1,2}\.$/;
+
+/**
+ * Component prefixes that own a construction row. These reports use generic
+ * labels ("Model Number", "Model / Size") under per-component headings, and
+ * findValue matches by substring — so a valve lookup for "Model Number" would
+ * happily match the cell "Actuator Model Number" and file a 667 actuator as
+ * the valve model. Each lookup passes the owners it must NOT steal from.
+ */
+export const ACTUATOR_OWNERS = ["Actuator", "Act.", "Act "] as const;
+export const POSITIONER_OWNERS = [
+  "Positioner",
+  "Pos.",
+  "Instrument",
+  "DVC",
+  "Device",
+] as const;
+export const VALVE_OWNERS = ["Valve", "Body"] as const;
+
+/**
+ * True when `text` matches a generic `label` only because a DIFFERENT
+ * component's name is attached to it. Exact-label cells are never owned.
+ */
+export function isOwnedByOther(
+  text: string,
+  label: string,
+  excludeOwners: readonly string[],
+): boolean {
+  if (!excludeOwners.length) return false;
+  const t = norm(text).toLowerCase();
+  const l = norm(label).toLowerCase();
+  if (t === l) return false; // the bare label itself — not owned by anyone
+  return excludeOwners.some((owner) => ownerRegex(owner).test(t));
+}
+
+/**
+ * Match an owner as a WHOLE WORD. A plain substring test is what caused the
+ * bug this guard exists to prevent: the owner "Act" is inside "Action", so
+ * the positioner's own "Model / Action" row looked actuator-owned. Owners
+ * ending in a word char get a trailing boundary; "Act." ends in a period,
+ * which is already a boundary.
+ */
+const ownerRegexCache = new Map<string, RegExp>();
+function ownerRegex(owner: string): RegExp {
+  const key = norm(owner).toLowerCase();
+  const cached = ownerRegexCache.get(key);
+  if (cached) return cached;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const trailing = /\w$/.test(key) ? "\\b" : "";
+  const re = new RegExp(`\\b${escaped}${trailing}`, "i");
+  ownerRegexCache.set(key, re);
+  return re;
+}
+
+/**
+ * True when a number-shaped value is definitely not real data for this field.
+ * One rule, used by validation and by both retry guards, so they can't drift.
+ */
+export function isBadNumericFor(key: string, value: string): boolean {
+  const t = value.trim();
+  if (!t) return false;
+  return NEVER_NUMERIC_FIELDS.has(key as EquipKey)
+    ? /^\d+\.?$/.test(t)
+    : FINDINGS_ITEM_NUMBER.test(t);
+}
+
 // ── Text extraction ───────────────────────────────────────────────────────────
 
 interface PageItems {
@@ -160,35 +256,51 @@ export async function extractTextItems(file: File): Promise<PageItems> {
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 
   const buf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const loadingTask = pdfjsLib.getDocument({ data: buf });
+  const pdf = await loadingTask.promise;
 
   const all: TItem[] = [];
   const page1: TItem[] = [];
   let pageWidth = 612;
 
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const vp = page.getViewport({ scale: 1 });
-    if (p === 1) pageWidth = vp.width;
+  // These reports run 10-15 MB (embedded photos). pdf.js holds every page's
+  // parsed structures until told otherwise, so without the cleanup/destroy
+  // below a few files in a row exhaust the tab's memory and kill it.
+  try {
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      try {
+        const vp = page.getViewport({ scale: 1 });
+        if (p === 1) pageWidth = vp.width;
 
-    const content = await page.getTextContent();
-    for (const raw of content.items as Array<{
-      str: string;
-      transform: number[];
-      width: number;
-    }>) {
-      const s = raw.str.trim();
-      if (!s) continue;
-      const item: TItem = {
-        str: s,
-        x: raw.transform[4],
-        y: vp.height - raw.transform[5],
-        w: Math.max(raw.width, 2),
-        page: p,
-      };
-      all.push(item);
-      if (p === 1) page1.push(item);
+        const content = await page.getTextContent();
+        for (const raw of content.items as Array<{
+          str: string;
+          transform: number[];
+          width: number;
+        }>) {
+          const s = raw.str.trim();
+          if (!s) continue;
+          const item: TItem = {
+            str: s,
+            x: raw.transform[4],
+            y: vp.height - raw.transform[5],
+            w: Math.max(raw.width, 2),
+            page: p,
+          };
+          all.push(item);
+          if (p === 1) page1.push(item);
+        }
+      } finally {
+        // Release this page's operator list / font data before the next one
+        page.cleanup();
+      }
     }
+  } finally {
+    // Tear the document down even if a page threw — otherwise the worker keeps
+    // the whole file resident and the next upload starts from a worse baseline.
+    // In pdfjs-dist 6.x the teardown lives on the loading task, not the proxy.
+    await loadingTask.destroy().catch(() => {});
   }
 
   // Detect where findings section begins (search all pages)
@@ -251,11 +363,14 @@ function findValue(
   labels: string[],
   strategy: "first" | "rightmost" | "strict" = "first",
   rowTol = 5,
+  excludeOwners: readonly string[] = [],
 ): string {
   for (const label of labels) {
     const lnorm = norm(label);
     let matches = items.filter(
-      (i) => norm(i.str) === lnorm || i.str.includes(label),
+      (i) =>
+        (norm(i.str) === lnorm || i.str.includes(label)) &&
+        !isOwnedByOther(i.str, label, excludeOwners),
     );
 
     if (!matches.length) continue;
@@ -330,8 +445,10 @@ function validateResult(result: ParsedPdfReport): ValidationIssue[] {
       issues.push({ field: key, value: v, reason: "repair_action" });
       continue;
     }
-    // Number-only value in equipment fields (likely a finding item number)
-    if (EQUIPMENT_FIELDS.has(key) && /^\d+\.?$/.test(v.trim())) {
+    // Number-only value in equipment fields. Only makes/flow-direction reject
+    // every bare number; model and serial fields reject just the findings
+    // item-number shape, because 667 / 1052 / 3582 are real model numbers.
+    if (EQUIPMENT_FIELDS.has(key) && isBadNumericFor(key, v)) {
       issues.push({ field: key, value: v, reason: "number_only" });
       continue;
     }
@@ -341,6 +458,32 @@ function validateResult(result: ParsedPdfReport): ValidationIssue[] {
     }
   }
   return issues;
+}
+
+
+/**
+ * Copy values from `wider` into fields that `base` left EMPTY. Never overwrites
+ * a value the narrower, more reliable pass already found.
+ *
+ * This is the guard that makes widening the search safe: page 1 above the
+ * findings header stays authoritative, and a looser scan can only ever fill
+ * gaps it would otherwise have left blank.
+ */
+export function mergeBlanks<T extends Record<string, unknown>>(
+  base: T,
+  wider: T,
+  onlyKeys?: ReadonlySet<string>,
+): T {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(wider)) {
+    if (k.startsWith("_")) continue; // never merge internal/meta fields
+    if (onlyKeys && !onlyKeys.has(k)) continue;
+    if (typeof v !== "string" || !v.trim()) continue;
+    const current = out[k];
+    if (typeof current === "string" && current.trim()) continue; // base wins
+    (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
 }
 
 // ── Field extraction (one pass) ───────────────────────────────────────────────
@@ -450,6 +593,11 @@ function extractFields(
   // ── Construction — AS LEFT preferred (rightmost) ──────────────────────────
   // Restrict to `safe` items (above findings section) for construction fields.
 
+  // Generic construction labels ("Make", "S/N", "Model Number") appear under
+  // a per-component heading, and findValue matches by substring — so a valve
+  // lookup must never match an Actuator/Positioner row. This is how a Fisher
+  // 667 actuator ended up in the valve model column.
+  const NOT_VALVE = [...ACTUATOR_OWNERS, ...POSITIONER_OWNERS];
   const valveMake =
     findValue(
       safe,
@@ -462,7 +610,9 @@ function extractFields(
         "Body Manufacturer",
       ],
       "rightmost",
-    ) || findValue(safe, ["Make"], "rightmost");
+    ) ||
+    // Generic "Make" must not match an Actuator/Positioner row
+    findValue(safe, ["Make"], "rightmost", 5, NOT_VALVE);
 
   const valveSerialNumber =
     findValue(
@@ -476,21 +626,23 @@ function extractFields(
         "Body Serial",
       ],
       "rightmost",
-    ) || findValue(safe, ["S/N"], "rightmost");
-
+    ) ||
+    // Generic "S/N" matches "Actuator S/N" / "Positioner S/N" by substring —
+    // without this guard the valve inherits another component's serial.
+    findValue(safe, ["S/N"], "rightmost", 5, NOT_VALVE);
   const valveModelSize =
     findValue(
       safe,
-      [
-        "Valve Model",
-        "Valve Model No.",
-        "Model Number",
-        "Valve Model/Size",
-        "Model / Size",
-        "Model/Size",
-      ],
+      ["Valve Model No.", "Valve Model/Size", "Valve Model"],
       "rightmost",
-    ) || findValue(safe, ["Model / Size", "Model/Size"], "rightmost");
+    ) ||
+    findValue(
+      safe,
+      ["Model Number", "Model / Size", "Model/Size"],
+      "rightmost",
+      5,
+      NOT_VALVE,
+    );
 
   const valveClassConnection = findValue(
     safe,
@@ -616,7 +768,6 @@ function extractFields(
     findValue(
       safe,
       [
-        "Model / Action",
         "Pos. Model / Action",
         "Positioner Model",
         "Pos. Model",
@@ -624,6 +775,11 @@ function extractFields(
       ],
       "rightmost",
     ) ||
+    // "Model / Action" is generic — don't let it match a valve/actuator row
+    findValue(safe, ["Model / Action"], "rightmost", 5, [
+      ...VALVE_OWNERS,
+      ...ACTUATOR_OWNERS,
+    ]) ||
     (() => {
       // Third "Model / Size" label (after valve and actuator) is positioner
       const hits = safe
@@ -746,7 +902,7 @@ function fixIssues(
       if (
         retriedVal &&
         !REPAIR_WORDS.has(retriedVal.toLowerCase()) &&
-        !/^\d+\.?$/.test(retriedVal)
+        !isBadNumericFor(key, retriedVal)
       ) {
         (fixed as Record<string, string>)[key] = retriedVal;
       }
@@ -817,6 +973,34 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   // ── Pass 1: Standard extraction from page 1 ──────────────────────────────
   const scope1 = page1.length > 5 ? page1 : all; // fall back to all if page1 is sparse
   let fields = extractFields(scope1, all, pageWidth, findingsStartY, "first");
+
+  // ── Pass 1b: widen the search for fields pass 1 left EMPTY ───────────────
+  // Pass 1 only reads page 1 above the findings header. Anything below that
+  // line, or on page 2+, was invisible: validateResult ignores empty fields
+  // (see `if (!v) continue`), so a missing serial produced zero issues, took
+  // the early return below, and never reached the all-pages pass 3. The AI
+  // masked this until a rate limit skipped it.
+  //
+  // Widen one rung at a time, fill-only via mergeBlanks, so the narrow and
+  // reliable page-1 result always wins and this can only add what was blank.
+  fields = mergeBlanks(
+    fields,
+    extractFields(scope1, all, pageWidth, Number.POSITIVE_INFINITY, "first"),
+  );
+  // Later pages hold the findings tables and photo captions. Only EQUIPMENT
+  // FIELDS may be filled from there: they are the ones validateResult polices
+  // for repair words and item numbers. Fields like benchSetAsLeft, ratedTravel
+  // and technician have NO such guard, so hunting them in narrative prose can
+  // fabricate a calibration spec — worse than leaving the cell blank.
+  const laterPages = all.filter((i) => i.page > 1);
+  if (laterPages.length > 0) {
+    fields = mergeBlanks(
+      fields,
+      extractFields(laterPages, all, pageWidth, Number.POSITIVE_INFINITY, "first"),
+      EQUIPMENT_FIELDS as ReadonlySet<string>,
+    );
+  }
+
   let issues = validateResult({ filename: file.name, ...fields });
 
   if (issues.length === 0) {
@@ -867,7 +1051,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     if (
       strictVal &&
       !REPAIR_WORDS.has(strictVal.toLowerCase()) &&
-      !/^\d+\.?$/.test(strictVal)
+      !isBadNumericFor(issue.field, strictVal)
     ) {
       (fields as Record<string, string>)[issue.field] = strictVal;
     } else {

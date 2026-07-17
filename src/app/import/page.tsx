@@ -26,8 +26,9 @@ import {
   ruleTextsForPrompt,
 } from "@/lib/imports/aiRules";
 import { applyEditPatch, type EditPatch } from "@/lib/imports/editOverrides";
-import { checkAiAvailable, enhanceWithAi } from "@/lib/imports/ollamaParser";
-import { type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
+import { checkAiAvailable, enhanceWithAi, generateObservationsHtml } from "@/lib/imports/ollamaParser";
+import { isRateLimit, type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
+import { estimateRequestTokens, groqBudget } from "@/lib/imports/tokenBudget";
 import { blankFieldsForRules, enforceBlankFields } from "@/lib/imports/ruleActions";
 import {
   deleteTrainingExample,
@@ -80,6 +81,12 @@ const CSV_COLS: CsvCol[] = [
 ];
 
 interface FileEntry {
+  /**
+   * Stable unique id. Filenames are NOT unique — the same report can be added
+   * twice — and every per-file map here (edits, extra columns, busy flags) is
+   * keyed by it, so a filename key made two entries share one edit overlay.
+   */
+  id: string;
   file: File;
   status: "pending" | "parsing" | "enhancing" | "done" | "error";
   statusMsg?: string;
@@ -101,6 +108,7 @@ export default function ImportPage() {
   // keyed by filename → column header. Overlaid onto the CSV export.
   const [extraColumns, setExtraColumns] = useState<Record<string, Record<string, string>>>({});
   const [showAllColumns, setShowAllColumns] = useState(false);
+  const [obsBusy, setObsBusy] = useState<Record<string, boolean>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -108,6 +116,9 @@ export default function ImportPage() {
 
   const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
   const [useAi, setUseAi] = useState(true);
+  // On by default for the free Groq tier (6k tokens/min). Turn it off after
+  // upgrading — the Developer tier's 250k/min makes the wait always zero.
+  const [throttle, setThrottle] = useState(true);
   const [examples, setExamples] = useState<TrainingExample[]>([]);
   const [showExamples, setShowExamples] = useState(false);
   const [rules, setRules] = useState<AIRule[]>([]);
@@ -121,6 +132,12 @@ export default function ImportPage() {
   useEffect(() => {
     checkAiAvailable().then(setAiAvailable);
     setExamples(getTrainingExamples());
+    try {
+      const saved = localStorage.getItem("import-throttle");
+      if (saved !== null) setThrottle(saved === "1");
+    } catch {
+      // storage unavailable — keep the safe default (throttle on)
+    }
     fetchAIRules().then(({ rules: loadedRules, shared }) => {
       setRules(loadedRules);
       setRulesShared(shared);
@@ -135,19 +152,30 @@ export default function ImportPage() {
     const rejected = all.length - arr.length;
     if (rejected > 0) toast(`${rejected} file${rejected > 1 ? "s" : ""} skipped — only PDFs are supported`, "error");
     if (!arr.length) return;
-    setEntries((prev) => [
-      ...prev,
-      ...arr.map((f) => ({ file: f, status: "pending" as const, assetType: pendingType })),
-    ]);
-    arr.forEach((f) => parseFile(f, pendingType));
+    const added: FileEntry[] = arr.map((f) => ({
+      id: crypto.randomUUID(),
+      file: f,
+      status: "pending" as const,
+      assetType: pendingType,
+    }));
+    setEntries((prev) => [...prev, ...added]);
+    // Parse one at a time. These PDFs run 10-15 MB and pdf.js holds a whole
+    // document in memory while reading it; three at once was enough to kill
+    // the tab. Sequential also spaces out the Groq calls, which the 6k
+    // tokens/min ceiling needs anyway.
+    void (async () => {
+      for (const e of added) {
+        await parseFile(e.id, e.file, e.assetType);
+      }
+    })();
   }
 
-  function setEntryAssetType(file: File, assetType: IrisAssetType) {
-    setEntries((prev) => prev.map((e) => e.file === file ? { ...e, assetType } : e));
+  function setEntryAssetType(id: string, assetType: IrisAssetType) {
+    setEntries((prev) => prev.map((e) => e.id === id ? { ...e, assetType } : e));
   }
 
-  async function parseFile(file: File, assetType: IrisAssetType) {
-    setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "parsing", statusMsg: "Extracting fields…", training: undefined } : e));
+  async function parseFile(id: string, file: File, assetType: IrisAssetType) {
+    setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "parsing", statusMsg: "Extracting fields…", training: undefined } : e));
     try {
       let result = await parsePdfFile(file);
       // Type-scoped training: rules for this type or "All"
@@ -155,22 +183,71 @@ export default function ImportPage() {
       if (useAi && aiAvailable) {
         const chosenExamples = pickExamplesForType(examples, assetType);
         const training = { examples: chosenExamples.length, rules: scopedRules.length };
-        setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…", training } : e));
-        result = await enhanceWithAi(result, (msg) => {
-          setEntries((prev) => prev.map((e) => (e.file === file ? { ...e, statusMsg: msg } : e)));
-        }, chosenExamples, ruleTextsForPrompt(scopedRules));
+        const setMsg = (msg: string) =>
+          setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, statusMsg: msg } : e)));
+        setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "enhancing", statusMsg: "AI filling missing fields…", training } : e));
+
+        // Pace against the per-minute token ceiling instead of failing into it.
+        // One report costs ~4.3k of a 6k/min free-tier budget, so file 2 in the
+        // same minute always 429s unless it waits its turn.
+        if (throttle) {
+          const est = estimateRequestTokens({
+            rawTextChars: result._rawText?.length ?? 0,
+            exampleChars: chosenExamples.reduce(
+              (n, ex) => n + Math.min(ex.rawText.length, 900) + JSON.stringify(ex.fields).length,
+              0,
+            ),
+            ruleChars: scopedRules.reduce((n, r) => n + Math.min(r.text.length, 300), 0),
+            withObservations: true,
+          });
+          const wait = groqBudget.waitFor(est);
+          // wait < 0 means one request exceeds the whole budget; the server
+          // trims the prompt to fit, so send it rather than stall forever.
+          if (wait > 0) {
+            const end = Date.now() + wait;
+            while (Date.now() < end) {
+              setMsg(`Waiting ${Math.ceil((end - Date.now()) / 1000)}s for token budget…`);
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+            setMsg("AI filling missing fields…");
+          }
+          groqBudget.record(est);
+        }
+
+        result = await enhanceWithAi(result, setMsg, chosenExamples, ruleTextsForPrompt(scopedRules));
       }
       // Deterministic enforcement: "leave X blank" rules clear fields the AI
       // and regex parser can't un-fill (empty AI answers never overwrite)
       result = enforceBlankFields(result, blankFieldsForRules(scopedRules.map((r) => r.text)));
-      setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "done", result, statusMsg: undefined } : e));
+      setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "done", result, statusMsg: undefined } : e));
+      // A silent AI failure looks exactly like a successful regex-only run, so
+      // say it out loud — the user's rules did not reach the model.
+      if (result._aiError) {
+        toast(`${file.name}: ${result._aiError}`, isRateLimit(result._aiError) ? "warning" : "error");
+      }
     } catch (err) {
-      setEntries((prev) => prev.map((e) => e.file === file ? { ...e, status: "error", error: String(err), statusMsg: undefined } : e));
+      setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "error", error: String(err), statusMsg: undefined } : e));
     }
   }
 
-  function removeEntry(file: File) {
-    setEntries((prev) => prev.filter((e) => e.file !== file));
+  function removeEntry(id: string) {
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+  }
+
+  /**
+   * Re-run extraction with the current rules. Clears this file's manual edits
+   * first: the edit overlay is applied ON TOP of the result, so a stale edit
+   * silently beats whatever the rule just fixed and the row looks unchanged.
+   */
+  function reExtract(entry: FileEntry) {
+    const hadEdits = Object.keys(editing[entry.id] ?? {}).length > 0;
+    setEditing((prev) => {
+      const next = { ...prev };
+      delete next[entry.id];
+      return next;
+    });
+    parseFile(entry.id, entry.file, entry.assetType);
+    if (hadEdits) toast("Manual edits cleared so the rules can take effect", "info");
   }
 
   function saveExample(entry: FileEntry) {
@@ -187,7 +264,7 @@ export default function ImportPage() {
     toast(`${entry.assetType} training example saved — ${Object.keys(fields).length} fields`, "success");
 
     // E1: if the user corrected fields, pre-fill a rule suggestion in the chat log
-    const edits = editing[entry.file.name];
+    const edits = editing[entry.id];
     if (edits && entry.result) {
       const parts: string[] = [];
       for (const [k, v] of Object.entries(edits)) {
@@ -247,9 +324,34 @@ export default function ImportPage() {
     setExtraColumns((prev) => ({ ...prev, [filename]: { ...(prev[filename] ?? {}), [header]: value } }));
   }
 
+  /**
+   * Generate AI observations prose for one report, on demand. This used to run
+   * automatically for every file and was the single biggest source of rate
+   * limiting (it targets the 70b prose model, ~6k tokens/min free tier).
+   */
+  async function generateObservations(entry: FileEntry) {
+    const merged = getMergedResult(entry);
+    if (!merged?._rawText) {
+      toast("No raw text available for this PDF", "error");
+      return;
+    }
+    setObsBusy((prev) => ({ ...prev, [entry.id]: true }));
+    try {
+      const html = await generateObservationsHtml(merged._rawText);
+      if (html) {
+        applyEdit(entry.id, { observationsHtml: html });
+        toast(`Observations generated for ${merged.tagOrUnit || entry.file.name}`, "success");
+      } else {
+        toast("Observations unavailable — likely rate limited, wait ~60s and retry", "warning");
+      }
+    } finally {
+      setObsBusy((prev) => ({ ...prev, [entry.id]: false }));
+    }
+  }
+
   function getMergedResult(entry: FileEntry): ParsedPdfReport | undefined {
     if (!entry.result) return undefined;
-    return applyEditPatch(entry.result, editing[entry.file.name] ?? {});
+    return applyEditPatch(entry.result, editing[entry.id] ?? {});
   }
 
   const doneEntries = entries.filter((e) => e.status === "done");
@@ -281,7 +383,7 @@ export default function ImportPage() {
       const reports = entriesOfType
         .map(getMergedResult)
         .filter((r): r is ParsedPdfReport => r !== undefined);
-      const extras = entriesOfType.map((e) => extraColumns[e.file.name]);
+      const extras = entriesOfType.map((e) => extraColumns[e.id]);
       exportIrisCsvFromParsed(reports, t, extras);
     }
   }
@@ -332,6 +434,37 @@ export default function ImportPage() {
                 style={{ accentColor: "var(--accent)" }}
               />
               Read all fields with AI
+            </label>
+          )}
+
+          {aiAvailable && useAi && (
+            <label
+              className="flex items-center gap-1.5 text-xs cursor-pointer"
+              style={{ color: "var(--text-secondary)" }}
+              title={
+                throttle
+                  ? "Spaces files out to fit the Groq tokens-per-minute limit. Slower, but files won't fail. Turn OFF if you're on a paid Groq tier."
+                  : "Files are sent as fast as they parse. If you're on the free tier (6k tokens/min), expect everything after the first file to be rate limited."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={throttle}
+                onChange={(e) => {
+                  setThrottle(e.target.checked);
+                  try {
+                    localStorage.setItem("import-throttle", e.target.checked ? "1" : "0");
+                  } catch {
+                    // storage unavailable — the setting still applies this session
+                  }
+                }}
+                className="rounded"
+                style={{ accentColor: "var(--accent)" }}
+              />
+              Auto-throttle
+              <span style={{ color: "var(--text-label)" }}>
+                {throttle ? "(free tier safe)" : "(off — paid tier)"}
+              </span>
             </label>
           )}
 
@@ -688,7 +821,7 @@ export default function ImportPage() {
             <div>
               {entries.map((entry, i) => (
                 <div
-                  key={entry.file.name}
+                  key={entry.id}
                   className="flex items-center gap-3 px-4 py-3"
                   style={{ borderTop: i > 0 ? "1px solid var(--border)" : undefined }}
                 >
@@ -709,6 +842,11 @@ export default function ImportPage() {
                         Trained with {entry.training.examples} {entry.assetType} example{entry.training.examples !== 1 ? "s" : ""} · {entry.training.rules} rule{entry.training.rules !== 1 ? "s" : ""}
                       </p>
                     )}
+                    {entry.status === "error" && entry.error && (
+                      <p className="mt-0.5 text-xs break-words" style={{ color: "var(--color-danger-text)" }}>
+                        {entry.error}
+                      </p>
+                    )}
                   </div>
                   {(entry.status === "parsing" || entry.status === "enhancing") && (
                     <span className="text-xs font-medium animate-pulse whitespace-nowrap" style={{ color: "var(--accent)" }}>
@@ -716,9 +854,19 @@ export default function ImportPage() {
                     </span>
                   )}
                   {entry.status === "done" && (
-                    <span className="text-xs font-medium whitespace-nowrap" style={{ color: "var(--color-success-text)" }}>
-                      ✓ Done{entry.result?._warnings?.some((w) => w.includes("AI filled")) ? " + AI" : ""}
-                    </span>
+                    entry.result?._aiError ? (
+                      <span
+                        className="text-xs font-medium whitespace-nowrap"
+                        style={{ color: "var(--color-warning-text)" }}
+                        title={entry.result._aiError}
+                      >
+                        ⚠ Regex only — rules not applied
+                      </span>
+                    ) : (
+                      <span className="text-xs font-medium whitespace-nowrap" style={{ color: "var(--color-success-text)" }}>
+                        ✓ Done{entry.result?._warnings?.some((w) => w.includes("AI filled")) ? " + AI" : ""}
+                      </span>
+                    )
                   )}
                   {entry.status === "error" && (
                     <span className="text-xs font-medium" style={{ color: "var(--color-danger-text)" }} title={entry.error}>
@@ -731,7 +879,7 @@ export default function ImportPage() {
                   {/* Per-file asset type override */}
                   <select
                     value={entry.assetType}
-                    onChange={(ev) => setEntryAssetType(entry.file, ev.target.value as IrisAssetType)}
+                    onChange={(ev) => setEntryAssetType(entry.id, ev.target.value as IrisAssetType)}
                     className="rounded border px-1.5 py-0.5 text-xs shrink-0"
                     style={{ background: "var(--bg-surface)", borderColor: "var(--border-solid)", color: "var(--text-secondary)" }}
                   >
@@ -743,16 +891,16 @@ export default function ImportPage() {
                     <>
                       <button
                         type="button"
-                        onClick={() => parseFile(entry.file, entry.assetType)}
-                        title="Re-run extraction with the current rules and training examples"
+                        onClick={() => reExtract(entry)}
+                        title="Re-run extraction with the current rules and training examples. Clears this file's manual edits so the rules can take effect."
                         className="rounded-lg border px-2 py-0.5 text-xs whitespace-nowrap transition-colors"
                         style={{
-                          borderColor: "var(--border-solid)",
-                          color: "var(--text-secondary)",
+                          borderColor: entry.result?._aiError ? "var(--color-warning-text)" : "var(--border-solid)",
+                          color: entry.result?._aiError ? "var(--color-warning-text)" : "var(--text-secondary)",
                           background: "var(--bg-surface)",
                         }}
                       >
-                        ↻ Re-extract
+                        ↻ {entry.result?._aiError ? "Retry AI" : "Re-extract"}
                       </button>
                       <button
                         type="button"
@@ -771,7 +919,7 @@ export default function ImportPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => removeEntry(entry.file)}
+                    onClick={() => removeEntry(entry.id)}
                     className="opacity-40 hover:opacity-100 transition-opacity"
                     style={{ color: "var(--text-secondary)" }}
                   >
@@ -873,15 +1021,15 @@ export default function ImportPage() {
                   <tbody>
                     {doneEntries.map((e, rowIdx) => {
                       const merged = getMergedResult(e);
-                      const patch = editing[e.file.name] ?? {};
-                      const rowExtras = extraColumns[e.file.name] ?? {};
+                      const patch = editing[e.id] ?? {};
+                      const rowExtras = extraColumns[e.id] ?? {};
                       // Live export values for unmapped columns (only needed in full view)
                       const previewByHeader = showAllColumns && merged
                         ? new Map(irisPreviewRow(merged, e.assetType).map((p) => [p.header, p.value]))
                         : null;
                       return (
                         <tr
-                          key={e.file.name}
+                          key={e.id}
                           style={{ borderTop: rowIdx > 0 ? "1px solid var(--border)" : undefined }}
                         >
                           <td
@@ -900,8 +1048,8 @@ export default function ImportPage() {
                               ? (merged ? col.getValue(merged, patch) : "")
                               : (rowExtras[label] ?? previewByHeader?.get(label) ?? "");
                             const onChange = col
-                              ? (v: string) => merged && applyEdit(e.file.name, col.onEdit(merged, patch, v))
-                              : (v: string) => applyExtraEdit(e.file.name, label, v);
+                              ? (v: string) => merged && applyEdit(e.id, col.onEdit(merged, patch, v))
+                              : (v: string) => applyExtraEdit(e.id, label, v);
                             return (
                               <td key={label} className="px-2 py-1">
                                 <input
@@ -987,7 +1135,7 @@ export default function ImportPage() {
                             <input
                               type="text"
                               value={value}
-                              onChange={(ev) => applyEdit(e.file.name, { [field]: ev.target.value })}
+                              onChange={(ev) => applyEdit(e.id, { [field]: ev.target.value })}
                               className="w-full rounded-lg border px-2 py-1 text-xs outline-none"
                               style={{
                                 background: "var(--bg-input, var(--bg-surface))",
@@ -1003,13 +1151,13 @@ export default function ImportPage() {
                       }
 
                       return (
-                        <tr key={e.file.name} style={{ borderTop: rowIdx > 0 ? "1px solid var(--border)" : undefined }}>
+                        <tr key={e.id} style={{ borderTop: rowIdx > 0 ? "1px solid var(--border)" : undefined }}>
                           {/* Assets — sticky tag cell */}
                           <td className="sticky left-0 z-10 px-2 py-1 border-r min-w-[140px]" style={{ background: "var(--bg-card)", borderColor: "var(--border)" }}>
                             <input
                               type="text"
                               value={r.tagOrUnit}
-                              onChange={(ev) => applyEdit(e.file.name, { tagOrUnit: ev.target.value })}
+                              onChange={(ev) => applyEdit(e.id, { tagOrUnit: ev.target.value })}
                               className="w-full rounded-lg border px-2 py-1 text-xs outline-none font-medium"
                               style={{
                                 background: "var(--bg-input, var(--bg-surface))",
@@ -1029,10 +1177,30 @@ export default function ImportPage() {
                           {recCell(r.repairDate, "repairDate", "YYYY-MM-DD")}
                           {recCell(woRef ? r.emrReference : "", "emrReference", "WO ref.")}
                           {recCell(r.technician, "technician", "Technician")}
-                          {/* Observations — contenteditable */}
+                          {/* Observations — contenteditable + on-demand AI prose */}
                           <td className="px-2 py-1 min-w-[300px] max-w-sm align-top">
+                            <div className="mb-1 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => generateObservations(e)}
+                                disabled={obsBusy[e.id] || !aiAvailable}
+                                title={
+                                  aiAvailable
+                                    ? "Write this observations block with AI (uses the prose model — run only when you need it)"
+                                    : "AI not configured"
+                                }
+                                className="rounded-lg border px-1.5 py-0.5 text-[10px] whitespace-nowrap transition-colors disabled:opacity-40"
+                                style={{
+                                  borderColor: "var(--color-info-border)",
+                                  color: "var(--color-info-text)",
+                                  background: "var(--color-info-bg)",
+                                }}
+                              >
+                                {obsBusy[e.id] ? "Writing…" : "✨ Write with AI"}
+                              </button>
+                            </div>
                             <div
-                              key={`obs-${e.file.name}`}
+                              key={`obs-${e.id}`}
                               contentEditable
                               suppressContentEditableWarning
                               className="w-full rounded-lg border px-2 py-1.5 text-[10px] outline-none min-h-[40px] [&_strong]:font-semibold [&_p]:leading-snug [&_p]:my-0"
@@ -1051,7 +1219,7 @@ export default function ImportPage() {
                               onBlur={(ev) => {
                                 const html = ev.currentTarget.innerHTML.trim();
                                 ev.currentTarget.style.borderColor = html ? "var(--border-solid)" : "var(--border)";
-                                applyEdit(e.file.name, { observationsHtml: html || undefined });
+                                applyEdit(e.id, { observationsHtml: html || undefined });
                               }}
                             />
                           </td>

@@ -24,6 +24,25 @@ function checkEnhanceRateLimit(req: NextRequest): Response | null {
 const GROQ_MODEL = "llama-3.1-8b-instant";
 const GROQ_MODEL_PROSE = "llama-3.3-70b-versatile";
 
+// Groq bills a request against the per-minute token budget as
+// `prompt_tokens + max_tokens`. On the on_demand tier BOTH models above are
+// capped at 6000 TPM, so any single request that reserves more than that is
+// rejected 413 "Request too large" and can never succeed — no amount of
+// waiting helps. Everything below exists to keep one request under the cap.
+// Override per environment if the org is on a higher tier.
+const TPM_LIMIT = Number(process.env.GROQ_TPM_LIMIT ?? 6000);
+const TPM_SAFETY_MARGIN = 400;
+
+/** Rough token estimate. Groq/Llama averages ~4 chars per token for English. */
+const estimateTokens = (s: string): number => Math.ceil(s.length / 4);
+
+/**
+ * Output reservation. Actual output is ~530 tokens (fields JSON ~230 + prose
+ * HTML ~300); these leave headroom without eating the whole TPM budget.
+ */
+const MAX_OUT_MERGED = 1400;
+const MAX_OUT_FIELDS = 900;
+
 export async function GET() {
   const available = Boolean(process.env.GROQ_API_KEY);
   return Response.json({ available, provider: available ? "groq" : null });
@@ -35,11 +54,30 @@ interface TrainingExample {
   filename?: string;
 }
 
+/**
+ * The observations structure, shared by the merged extraction prompt and the
+ * standalone 70b prose call so both produce an identical block shape.
+ */
+const OBSERVATIONS_STRUCTURE = `<p><strong>Observations &amp; Findings</strong></p>
+<p>Body: [1-2 sentences: condition found and work done to valve body/bonnet]</p>
+<p>Trim: [1-2 sentences: condition found and work done to trim/plug/stem/seat/cage]</p>
+<p>Actuator: [1-2 sentences: condition found and work done to actuator]</p>
+<p>Positioner: [1-2 sentences: condition found and work done to positioner/DVC]</p>
+<p>Tubing / Airset: [1-2 sentences: condition found and work done to tubing, air filter regulator]</p>
+<p><br></p>
+<p><strong>Work Performed Summary</strong></p>
+<p>Body – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Trim – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Actuator – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Positioner – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+<p>Tubing / Airset – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>`;
+
 function buildPrompt(
   fields: Array<{ key: string; desc: string }>,
   rawText: string,
   examples: TrainingExample[],
   rules: string[] = [],
+  withObservations = false,
 ): string {
   const fieldList = fields.map((f) => `- "${f.key}": ${f.desc}`).join("\n");
 
@@ -50,9 +88,14 @@ function buildPrompt(
     .map((r) => `- ${r}`)
     .join("\n");
 
-  // Few-shot examples block (max 3, truncate each to keep tokens reasonable)
+  // Few-shot examples block. One example only: every example costs prompt
+  // tokens on EVERY extraction forever, and against a 6000 TPM ceiling that
+  // budget is better spent on the report being read than on a second sample
+  // of the same fixed template.
+  const EXAMPLE_COUNT = 1;
+  const EXAMPLE_TEXT_CHARS = 900;
   let examplesBlock = "";
-  for (const ex of examples.slice(0, 3)) {
+  for (const ex of examples.slice(0, EXAMPLE_COUNT)) {
     const nonEmpty = Object.fromEntries(
       Object.entries(ex.fields).filter(([, v]) => v?.trim()),
     );
@@ -60,16 +103,30 @@ function buildPrompt(
     examplesBlock += `
 --- EXAMPLE${ex.filename ? ` (${ex.filename})` : ""} ---
 PDF text:
-${ex.rawText.slice(0, 2500)}
+${ex.rawText.slice(0, EXAMPLE_TEXT_CHARS)}
 
 Correct extraction:
-${JSON.stringify(nonEmpty, null, 2)}
+${JSON.stringify(nonEmpty)}
 
 `;
   }
 
-  // Shrink new PDF text if examples are taking space
-  const newTextLimit = examples.length > 0 ? 6000 : 9000;
+  // Give the report text whatever budget is left after the fixed blocks and
+  // the output reservation. This is what makes a 413 structurally impossible:
+  // the request is sized to the cap instead of hoping it fits.
+  const fixedChars =
+    fieldList.length +
+    rulesBlock.length +
+    examplesBlock.length +
+    (withObservations ? OBSERVATIONS_STRUCTURE.length + 400 : 0) +
+    600; // prompt scaffolding + system message
+  const reserved =
+    estimateTokens("x".repeat(fixedChars)) +
+    (withObservations ? MAX_OUT_MERGED : MAX_OUT_FIELDS) +
+    TPM_SAFETY_MARGIN;
+  const rawTextTokenBudget = Math.max(0, TPM_LIMIT - reserved);
+  // Also keep the previous hard ceiling — never send more than we used to.
+  const newTextLimit = Math.min(examplesBlock ? 6000 : 9000, rawTextTokenBudget * 4);
 
   return `You are extracting data from an Applied Control repair report PDF.
 
@@ -93,29 +150,37 @@ Now extract from this NEW report using the same format:`
 
 PDF text:
 ${rawText.slice(0, newTextLimit)}
+${
+  withObservations
+    ? `
+Also write an "observationsHtml" summary of this SAME report text, using EXACTLY
+this structure (omit any component line if that component is not mentioned):
 
-Return a JSON object with the field keys listed above. Use "" for any field not found.
+${OBSERVATIONS_STRUCTURE}
+
+Observations rules:
+- Use ONLY information found in the report text above. Never invent findings.
+- Omit any component line (from both sections) if that component is not mentioned.
+- Only <p>, <strong> and <br> tags. No markdown, no code fences.
+- Encode & as &amp; inside text content.
+`
+    : ""
+}
+Return a JSON object with the field keys listed above${withObservations ? `, plus an "observationsHtml" key holding the HTML block as a single string` : ""}. Use "" for any field not found.
 Do not guess or invent values — only extract what is clearly present in the text.`;
 }
 
+/**
+ * Standalone prose prompt for the 70b model. Only used for the on-demand
+ * "Write with AI" upgrade — the normal per-file path gets observations from
+ * the merged extraction call instead, which reads the document once.
+ */
 function buildObservationsPrompt(rawText: string): string {
   return `You are analyzing a valve repair report. Generate an HTML observations block for the Iris asset management system.
 
 Use EXACTLY this structure (omit any component line if that component is not mentioned in the report):
 
-<p><strong>Observations &amp; Findings</strong></p>
-<p>Body: [1-2 sentences: condition found and work done to valve body/bonnet]</p>
-<p>Trim: [1-2 sentences: condition found and work done to trim/plug/stem/seat/cage]</p>
-<p>Actuator: [1-2 sentences: condition found and work done to actuator]</p>
-<p>Positioner: [1-2 sentences: condition found and work done to positioner/DVC]</p>
-<p>Tubing / Airset: [1-2 sentences: condition found and work done to tubing, air filter regulator]</p>
-<p><br></p>
-<p><strong>Work Performed Summary</strong></p>
-<p>Body – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Trim – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Actuator – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Positioner – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Tubing / Airset – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
+${OBSERVATIONS_STRUCTURE}
 
 Rules:
 - Use ONLY information found in the repair report text. Never invent or guess findings.
@@ -146,6 +211,7 @@ export async function POST(req: NextRequest) {
     examples?: TrainingExample[];
     rules?: string[];
     generateObservations?: boolean;
+    withObservations?: boolean;
   };
   try {
     body = await req.json();
@@ -153,7 +219,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { rawText, fields, examples = [], rules = [], generateObservations } = body;
+  const { rawText, fields, examples = [], rules = [], generateObservations, withObservations = false } = body;
 
   // Guard oversized inputs to cap Groq cost and prevent abuse
   if ((rawText?.length ?? 0) > 100_000) {
@@ -225,7 +291,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const prompt = buildPrompt(fields, rawText, examples, rules);
+  const prompt = buildPrompt(fields, rawText, examples, rules, withObservations);
 
   try {
     const res = await fetch(GROQ_URL, {
@@ -246,9 +312,12 @@ export async function POST(req: NextRequest) {
         ],
         response_format: { type: "json_object" },
         temperature: 0,
-        max_tokens: 1024,
+        // Groq counts prompt + max_tokens against the TPM cap, so an oversized
+        // reservation alone can 413 a request that would never have used it.
+        // Real output is ~530 tokens; these keep headroom without burning budget.
+        max_tokens: withObservations ? MAX_OUT_MERGED : MAX_OUT_FIELDS,
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(withObservations ? 45_000 : 30_000),
     });
 
     if (!res.ok) {
