@@ -110,6 +110,8 @@ export default function ImportPage() {
   const [showAllColumns, setShowAllColumns] = useState(false);
   const [obsBusy, setObsBusy] = useState<Record<string, boolean>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Serialises ALL parsing, across separate addFiles calls. */
+  const parseQueue = useRef<Promise<void>>(Promise.resolve());
   const [dragOver, setDragOver] = useState(false);
 
   const [pendingType, setPendingType] = useState<IrisAssetType | null>(null);
@@ -163,11 +165,20 @@ export default function ImportPage() {
     // document in memory while reading it; three at once was enough to kill
     // the tab. Sequential also spaces out the Groq calls, which the 6k
     // tokens/min ceiling needs anyway.
-    void (async () => {
-      for (const e of added) {
-        await parseFile(e.id, e.file, e.assetType);
-      }
-    })();
+    //
+    // Chain onto ONE queue rather than starting a loop per call: dropping
+    // files in one at a time used to spawn a second concurrent loop, which
+    // reintroduced the parallel-parse crash and let two files race the token
+    // budget (both saw it as free, both fired, both 429'd).
+    parseQueue.current = parseQueue.current
+      .then(async () => {
+        for (const e of added) {
+          await parseFile(e.id, e.file, e.assetType);
+        }
+      })
+      .catch(() => {
+        // one file's failure must not break the queue for the next
+      });
   }
 
   function setEntryAssetType(id: string, assetType: IrisAssetType) {
@@ -203,15 +214,19 @@ export default function ImportPage() {
           const wait = groqBudget.waitFor(est);
           // wait < 0 means one request exceeds the whole budget; the server
           // trims the prompt to fit, so send it rather than stall forever.
+          const goAt = Date.now() + Math.max(wait, 0);
+          // Reserve at the moment the request will actually go, BEFORE waiting.
+          // Recording afterwards left the budget looking free for the whole
+          // wait, so anything starting meanwhile computed a wrong (too short)
+          // timer and fired into the ceiling.
+          groqBudget.record(est, goAt);
           if (wait > 0) {
-            const end = Date.now() + wait;
-            while (Date.now() < end) {
-              setMsg(`Waiting ${Math.ceil((end - Date.now()) / 1000)}s for token budget…`);
+            while (Date.now() < goAt) {
+              setMsg(`Waiting ${Math.ceil((goAt - Date.now()) / 1000)}s for token budget…`);
               await new Promise((r) => setTimeout(r, 1000));
             }
             setMsg("AI filling missing fields…");
           }
-          groqBudget.record(est);
         }
 
         result = await enhanceWithAi(result, setMsg, chosenExamples, ruleTextsForPrompt(scopedRules));
@@ -261,25 +276,31 @@ export default function ImportPage() {
     ) as Record<string, string>;
     const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText!, fields, assetType: entry.assetType });
     setExamples((prev) => [...prev, saved]);
+
     toast(`${entry.assetType} training example saved — ${Object.keys(fields).length} fields`, "success");
 
-    // E1: if the user corrected fields, pre-fill a rule suggestion in the chat log
-    const edits = editing[entry.id];
-    if (edits && entry.result) {
+    // Offer a rule for anything the user corrected.
+    //
+    // Diff the MERGED result against the original, never the raw edit patch:
+    // split cells (Valve model/size, bench set) are stored as _-prefixed
+    // overrides, so iterating the patch skipped exactly the fields the 667 bug
+    // lives in. applyEditPatch has already rejoined them here.
+    const original = entry.result;
+    if (original) {
       const parts: string[] = [];
-      for (const [k, v] of Object.entries(edits)) {
-        if (k.startsWith("_") || k === "observationsHtml" || typeof v !== "string") continue;
-        const orig = (entry.result as unknown as Record<string, unknown>)[k];
-        if (typeof orig === "string" && orig !== v && v.trim()) {
-          parts.push(`the "${k}" field should be "${v}" (AI extracted "${orig || "nothing"}")`);
-        }
+      for (const [k, v] of Object.entries(merged)) {
+        if (k.startsWith("_") || k === "observationsHtml") continue;
+        if (typeof v !== "string" || !v.trim()) continue;
+        const orig = (original as unknown as Record<string, unknown>)[k];
+        if (typeof orig !== "string" || orig === v) continue; // not a correction
+        parts.push(`the "${k}" field should be "${v}" (extracted "${orig || "nothing"}")`);
         if (parts.length >= 2) break;
       }
       if (parts.length > 0) {
         setRuleDraft(`On reports like ${entry.file.name.replace(/\.pdf$/i, "")}, ${parts.join("; ")}. Rule: `);
         setRuleScope(entry.assetType);
         setShowRules(true);
-        toast("Tip: turn that correction into a rule below so the AI stops making it", "info");
+        toast("Tip: turn that correction into a rule so the AI stops making it", "info");
       }
     }
   }

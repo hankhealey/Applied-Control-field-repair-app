@@ -91,3 +91,35 @@ describe("estimateRequestTokens", () => {
     expect(huge).toBe(normal);
   });
 });
+
+describe("reserving at go-time — files added one at a time", () => {
+  it("a file starting mid-wait sees the reservation and queues behind it", () => {
+    const b = new TokenBudget(6000);
+    // File 1 goes now and reserves at its go-time.
+    b.record(4338, T0);
+    // File 2 arrives 1s later: must wait out file 1's window.
+    const wait2 = b.waitFor(4338, T0 + 1000);
+    expect(wait2).toBe(59_000);
+    const goAt2 = T0 + 1000 + wait2; // = T0 + 60_000
+    b.record(4338, goAt2); // reserved BEFORE waiting
+
+    // File 3 dropped in 2s later, while file 2 is still counting down.
+    // It must see file 2's future reservation, not an empty budget.
+    const wait3 = b.waitFor(4338, T0 + 3000);
+    expect(wait3).toBeGreaterThan(0);
+    const goAt3 = T0 + 3000 + wait3;
+    expect(goAt3).toBeGreaterThanOrEqual(goAt2); // never before file 2
+  });
+
+  it("without a future reservation the third file would wrongly fire early", () => {
+    // Documents the old bug: recording only AFTER the wait left the budget
+    // looking free, so a file added mid-wait computed a too-short timer.
+    const b = new TokenBudget(6000);
+    b.record(4338, T0);
+    // File 2 is "waiting" but has recorded nothing yet (old behaviour).
+    expect(b.waitFor(4338, T0 + 3000)).toBe(57_000); // sees only file 1
+    // With the reservation in place it must wait longer than that.
+    b.record(4338, T0 + 60_000);
+    expect(b.waitFor(4338, T0 + 3000)).toBeGreaterThan(57_000);
+  });
+});

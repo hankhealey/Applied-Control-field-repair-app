@@ -53,13 +53,17 @@ export function isRateLimit(aiError: string | undefined): boolean {
   return Boolean(aiError && /rate.?limit|429|too many requests/i.test(aiError));
 }
 
-interface TItem {
+/** A positioned text run from the PDF. Public for the learned field map. */
+export interface TextItem {
   str: string;
   x: number;
   y: number; // top-down (inverted from PDF coords)
   w: number;
   page: number;
 }
+
+/** Internal alias — this file used TItem throughout before it was exported. */
+type TItem = TextItem;
 
 // ── String utilities ──────────────────────────────────────────────────────────
 
@@ -318,17 +322,32 @@ export async function extractTextItems(file: File): Promise<PageItems> {
 
 // ── Core lookup helpers ───────────────────────────────────────────────────────
 
+/**
+ * Vertical slack, in PDF units, for two runs to count as the same visual row.
+ * Exported so the learned field map scans rows on exactly the same terms — if
+ * the map and the parser disagreed about what "same row" means, a mapping
+ * would read a different cell than the one it was taught.
+ */
+export const ROW_TOL = 5;
+
+/** True when `a` and `b` sit on the same visual row of the same page. */
+export const sameRow = (a: TextItem, b: TextItem, tol: number = ROW_TOL): boolean =>
+  a.page === b.page && Math.abs(a.y - b.y) <= tol;
+
 /** Items to the right of `origin` on the same row */
 function rightOf(
   items: TItem[],
   origin: TItem,
-  rowTol = 5,
+  rowTol = ROW_TOL,
   _maxGap = 25,
 ): TItem[] {
   return items
     .filter(
       (i) =>
-        Math.abs(i.y - origin.y) <= rowTol &&
+        // sameRow includes the page test. Without it, a label on page 1 could
+        // match a value at the same y on page 3: y is computed per page
+        // (vp.height - transform[5]), so coordinates repeat on every page.
+        sameRow(i, origin, rowTol) &&
         i.x > origin.x + origin.w - 4 &&
         norm(i.str) !== norm(origin.str),
     )
@@ -970,6 +989,19 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
 
   const warnings: string[] = [];
 
+  /** Single exit for all three passes — one place that shapes the result. */
+  const finish = (
+    result: Omit<ParsedPdfReport, "filename" | "_passCount" | "_warnings">,
+    passCount: number,
+    notes: string[],
+  ): ParsedPdfReport => ({
+    filename: file.name,
+    ...result,
+    _passCount: passCount,
+    _rawText: rawText,
+    _warnings: notes,
+  });
+
   // ── Pass 1: Standard extraction from page 1 ──────────────────────────────
   const scope1 = page1.length > 5 ? page1 : all; // fall back to all if page1 is sparse
   let fields = extractFields(scope1, all, pageWidth, findingsStartY, "first");
@@ -1004,13 +1036,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   let issues = validateResult({ filename: file.name, ...fields });
 
   if (issues.length === 0) {
-    return {
-      filename: file.name,
-      ...fields,
-      _passCount: 1,
-      _rawText: rawText,
-      _warnings: [],
-    };
+    return finish(fields, 1, []);
   }
 
   warnings.push(
@@ -1022,13 +1048,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   issues = validateResult({ filename: file.name, ...fields });
 
   if (issues.length === 0) {
-    return {
-      filename: file.name,
-      ...fields,
-      _passCount: 2,
-      _rawText: rawText,
-      _warnings: warnings,
-    };
+    return finish(fields, 2, warnings);
   }
 
   warnings.push(
@@ -1070,11 +1090,5 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     }
   }
 
-  return {
-    filename: file.name,
-    ...fields,
-    _passCount: 3,
-    _rawText: rawText,
-    _warnings: warnings,
-  };
+  return finish(fields, 3, warnings);
 }
