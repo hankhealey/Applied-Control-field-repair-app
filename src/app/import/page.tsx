@@ -301,11 +301,6 @@ export default function ImportPage() {
     setEntries((prev) => prev.filter((e) => e.id !== id));
   }
 
-  /**
-   * Re-run extraction with the current rules. Clears this file's manual edits
-   * first: the edit overlay is applied ON TOP of the result, so a stale edit
-   * silently beats whatever the rule just fixed and the row looks unchanged.
-   */
   /** Chain onto the ONE queue, so nothing ever parses in parallel. */
   function enqueue(id: string, file: File, assetType: IrisAssetType) {
     parseQueue.current = parseQueue.current
@@ -315,6 +310,11 @@ export default function ImportPage() {
       });
   }
 
+  /**
+   * Re-run extraction with the current rules. Clears this file's manual edits
+   * first: the edit overlay is applied ON TOP of the result, so a stale edit
+   * silently beats whatever the rule just fixed and the row looks unchanged.
+   */
   function reExtract(entry: FileEntry) {
     const hadEdits = Object.keys(editing[entry.id] ?? {}).length > 0;
     setEditing((prev) => {
@@ -337,21 +337,51 @@ export default function ImportPage() {
       toast("Cannot train: no raw text extracted from this PDF", "error");
       return;
     }
+    // Save ONLY fields you actually touched.
+    //
+    // This used to save every non-empty field on screen, which meant unverified
+    // AI guesses were stored as ground truth and fed back into the next
+    // extraction as "here is how to read this correctly". Measured on a real
+    // report: 20/21 fields correct with the AI alone, 12/21 after training on
+    // its own output. The loop was teaching the model its own mistakes.
+    //
+    // An edited field is one you looked at and corrected, which is the only
+    // signal here that a value is right. Everything else is the machine's guess
+    // about itself.
+    const original = entry.result;
     const fields = Object.fromEntries(
-      Object.entries(merged).filter(([k, v]) => !k.startsWith("_") && typeof v === "string" && v.trim()),
+      Object.entries(merged).filter(([k, v]) => {
+        if (k.startsWith("_") || k === "observationsHtml") return false;
+        if (typeof v !== "string" || !v.trim()) return false;
+        const before = (original as unknown as Record<string, unknown>)?.[k];
+        return typeof before === "string" && before !== v;
+      }),
     ) as Record<string, string>;
-    const saved = saveTrainingExample({ filename: entry.file.name.replace(/\.pdf$/i, ""), rawText: merged._rawText!, fields, assetType: entry.assetType });
+
+    if (Object.keys(fields).length === 0) {
+      toast(
+        "Nothing to train on — correct a cell first. Saving unedited values teaches the AI its own guesses.",
+        "warning",
+      );
+      return;
+    }
+
+    const saved = saveTrainingExample({
+      filename: entry.file.name.replace(/\.pdf$/i, ""),
+      rawText: merged._rawText!,
+      fields,
+      assetType: entry.assetType,
+    });
     setExamples((prev) => [...prev, saved]);
 
-    toast(`${entry.assetType} training example saved — ${Object.keys(fields).length} fields`, "success");
+    toast(
+      `${entry.assetType} example saved — ${Object.keys(fields).length} corrected field${Object.keys(fields).length !== 1 ? "s" : ""}`,
+      "success",
+    );
 
-    // Offer a rule for anything the user corrected.
-    //
-    // Diff the MERGED result against the original, never the raw edit patch:
-    // split cells (Valve model/size, bench set) are stored as _-prefixed
-    // overrides, so iterating the patch skipped exactly the fields the 667 bug
-    // lives in. applyEditPatch has already rejoined them here.
-    const original = entry.result;
+    // Offer a rule for anything the user corrected. Reuses `original` above —
+    // `fields` is already exactly the set of corrections, so this just phrases
+    // the first couple of them.
     if (original) {
       const parts: string[] = [];
       for (const [k, v] of Object.entries(merged)) {

@@ -438,63 +438,63 @@ function findValue(
  * (0-indexed from left after the row label).
  */
 /**
- * True when `item` is a standalone component HEADING ("Positioner", "Device 1")
- * rather than a labelled cell ("Positioner S/N"). Headings are how these reports
- * express ownership when the rows beneath them use bare labels.
+ * Component ownership by POSITION, for reports that label construction rows
+ * generically.
+ *
+ * Verified against a real Applied Control report. CONSTRUCTION (AS FOUND) and
+ * (AS LEFT) are printed SIDE BY SIDE — identical y values, different x — and
+ * each column runs Body → Actuator → Positioner using the same bare labels:
+ *
+ *   AS LEFT column (x >= pageWidth/2), label x-positions ~376-414:
+ *     y=209.4 "Make"          y=289.6 "Make"          y=358.6 "Make"
+ *     y=220.7 "S/N"           y=300.9 "S/N"           y=369.9 "S/N"
+ *     y=231.9 "Model / Size"  y=312.1 "Model / Size"  y=381.1 "Model / Action"
+ *     └──── Body ────┘        └── Actuator ──┘        └─ Positioner ─┘
+ *
+ * So ownership is positional twice over: which COLUMN (as-found vs as-left) and
+ * which OCCURRENCE (which component). Neither is in the label text, which is
+ * why `isOwnedByOther` cannot help — "Make" carries no owner word.
+ *
+ * An earlier attempt scoped by the rotated component headings ("Body",
+ * "Actuator", "Position.") in the left gutter. That was wrong twice: the
+ * heading "Position." is not any of POSITIONER_OWNERS, and pdf.js reports a
+ * rotated label near the BOTTOM of its block, so a band of "rows below the
+ * heading" collects the NEXT component's rows.
  */
-function isSectionHeading(item: TItem, owners: readonly string[]): boolean {
-  const t = norm(item.str);
-  return owners.some((o) => {
-    const ow = norm(o);
-    // exact ("Positioner") or numbered ("Device 1"), never a prefixed cell
-    return t.toLowerCase() === ow.toLowerCase() ||
-      new RegExp(`^${ow.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\d+$`, "i").test(t);
-  });
+
+/** Items in the AS LEFT column. AS FOUND occupies the left half of the page. */
+function asLeftColumn(items: TItem[], pageWidth: number): TItem[] {
+  return items.filter((i) => i.x >= pageWidth / 2);
 }
 
 /**
- * The y-band of items belonging to one component's sub-block.
+ * Value of the Nth occurrence of a bare label within the AS LEFT column,
+ * counting top to bottom. `occurrence` is 1-based: 1 = Body, 2 = Actuator,
+ * 3 = Positioner.
  *
- * These reports print a component heading and then bare labels beneath it:
- *
- *     Positioner
- *       Make   FISHER
- *       S/N    F002363859
- *
- * Ownership is expressed by VERTICAL POSITION, not by label text — so
- * `isOwnedByOther` has nothing to bite on ("Make" contains no owner word) and
- * the `rightmost` strategy degenerates to "last in document order" when every
- * label shares an x. Scoping to the band between this component's heading and
- * the next component's heading is what makes a bare "S/N" unambiguous.
- *
- * Returns [] when no heading is found, so callers fall through to their existing
- * behaviour on reports that don't use this layout.
+ * Matches the label EXACTLY (not by substring) so a bare "Make" never picks up
+ * "Actuator Make" on a report that does prefix its labels — those are handled
+ * by the prefixed lookups that run before this.
  */
-function sectionScope(
+function nthInAsLeft(
   items: TItem[],
-  owners: readonly string[],
-  allOwners: readonly (readonly string[])[],
-): TItem[] {
-  const heading = items
-    .filter((i) => isSectionHeading(i, owners))
-    .sort((a, b) => a.y - b.y)[0];
-  if (!heading) return [];
-
-  // The band ends at the next heading of ANY component below this one. Without
-  // this the positioner's scope would swallow every row to the end of the page.
-  const nextY = items
-    .filter(
-      (i) =>
-        i.page === heading.page &&
-        i.y > heading.y &&
-        allOwners.some((set) => isSectionHeading(i, set)) &&
-        !isSectionHeading(i, owners),
-    )
-    .reduce((min, i) => Math.min(min, i.y), Number.POSITIVE_INFINITY);
-
-  return items.filter(
-    (i) => i.page === heading.page && i.y > heading.y && i.y < nextY,
-  );
+  labels: string[],
+  occurrence: number,
+  pageWidth: number,
+  maxGap = 22,
+): string {
+  const col = asLeftColumn(items, pageWidth);
+  for (const label of labels) {
+    const lnorm = norm(label).toLowerCase();
+    const hits = col
+      .filter((i) => norm(i.str).toLowerCase() === lnorm)
+      .sort((a, b) => a.y - b.y);
+    if (hits.length < occurrence) continue;
+    const right = rightOf(col, hits[occurrence - 1]);
+    const val = right.length ? buildValue(right, 5, maxGap) : "";
+    if (val) return val;
+  }
+  return "";
 }
 
 function findCalAL(items: TItem[], colIdx: number): string {
@@ -698,13 +698,11 @@ export function extractFields(
   // 667 actuator ended up in the valve model column.
   const NOT_VALVE = [...ACTUATOR_OWNERS, ...POSITIONER_OWNERS];
 
-  // Per-component y-bands, for reports that print bare labels under a heading.
-  // Empty when the report has no such headings, in which case every lookup below
-  // falls through to exactly the behaviour it had before.
-  const ALL_OWNER_SETS = [VALVE_OWNERS, ACTUATOR_OWNERS, POSITIONER_OWNERS];
-  const valveSection = sectionScope(safe, VALVE_OWNERS, ALL_OWNER_SETS);
-  const actuatorSection = sectionScope(safe, ACTUATOR_OWNERS, ALL_OWNER_SETS);
-  const positionerSection = sectionScope(safe, POSITIONER_OWNERS, ALL_OWNER_SETS);
+  // Ordinal position within the AS LEFT column: 1 = Body, 2 = Actuator,
+  // 3 = Positioner. Returns "" when the report doesn't use bare labels, so
+  // every lookup falls through to the behaviour it had before.
+  const asLeftNth = (labels: string[], n: number, maxGap?: number) =>
+    nthInAsLeft(safe, labels, n, _pageWidth, maxGap);
   const valveMake =
     findValue(
       safe,
@@ -722,7 +720,7 @@ export function extractFields(
     // Must precede the guarded whole-page fallback below: on a stacked layout
     // every "Make" shares an x, `rightmost` degenerates to last-in-order, and
     // the valve inherits whichever component is printed last.
-    findValue(valveSection, ["Make", "Manufacturer", "Mfr."], "first") ||
+    asLeftNth(["Make", "Manufacturer", "Mfr."], 1) ||
     // Generic "Make" must not match an Actuator/Positioner row
     findValue(safe, ["Make"], "rightmost", 5, NOT_VALVE);
 
@@ -739,7 +737,7 @@ export function extractFields(
       ],
       "rightmost",
     ) ||
-    findValue(valveSection, ["S/N", "Serial No.", "Serial"], "first") ||
+    asLeftNth(["S/N", "Serial No.", "Serial"], 1) ||
     // Generic "S/N" matches "Actuator S/N" / "Positioner S/N" by substring —
     // without this guard the valve inherits another component's serial.
     findValue(safe, ["S/N"], "rightmost", 5, NOT_VALVE);
@@ -749,6 +747,12 @@ export function extractFields(
       ["Valve Model No.", "Valve Model/Size", "Valve Model"],
       "rightmost",
     ) ||
+    // Bare "Model / Size", 1st occurrence in the AS LEFT column = Body. Must
+    // precede the guarded fallback below: that one picks by max x, and since
+    // both construction columns put this label at the same x it resolves to the
+    // LAST row in document order — the actuator. That is how 657 landed here.
+    // Wide gap because the value is two cells ("U" then 3") ~47px apart.
+    asLeftNth(["Model / Size", "Model Number", "Model/Size"], 1, 55) ||
     findValue(
       safe,
       ["Model Number", "Model / Size", "Model/Size"],
@@ -757,7 +761,8 @@ export function extractFields(
       NOT_VALVE,
     );
 
-  const valveClassConnection = findValue(
+  const valveClassConnection =
+    findValue(
     safe,
     [
       "Class / Conn.",
@@ -768,7 +773,7 @@ export function extractFields(
       "Class & Rating",
     ],
     "rightmost",
-  );
+  ) || asLeftNth(["Class/Conn.", "Class / Conn.", "Class/Connection"], 1, 55);
 
   const valvePackingConfiguration = findValue(
     safe,
@@ -783,18 +788,23 @@ export function extractFields(
     "rightmost",
   );
 
-  const valveTrimCharPort = findValue(
-    safe,
-    [
-      "Trim Char / Port",
-      "Trim / Char / Port",
-      "Trim Style",
-      "Trim Characteristic",
-      "Trim Char/Port",
-      "Trim",
-    ],
-    "rightmost",
-  );
+  const valveTrimCharPort =
+    // First, because the lookup below matches the same bare label but reads it
+    // with the default 22px gap and so returns only the first cell
+    // ("Mod. Linear", dropping the 3" beside it).
+    asLeftNth(["Trim Char/Port", "Trim Char / Port"], 1, 55) ||
+    findValue(
+      safe,
+      [
+        "Trim Char / Port",
+        "Trim / Char / Port",
+        "Trim Style",
+        "Trim Characteristic",
+        "Trim Char/Port",
+        "Trim",
+      ],
+      "rightmost",
+    );
 
   const valveFlowDirection = findValue(
     safe,
@@ -810,7 +820,7 @@ export function extractFields(
     ) ||
     // Bare "Make" under an "Actuator" heading. No prefixed text to guard on, so
     // scope to the heading's band instead.
-    findValue(actuatorSection, ["Make", "Manufacturer", "Mfr."], "first");
+    asLeftNth(["Make", "Manufacturer", "Mfr."], 2);
 
   const actuatorSerialNumber =
     findValue(
@@ -818,7 +828,7 @@ export function extractFields(
       ["Actuator S/N", "Actuator Serial No.", "Actuator Serial", "Act. S/N"],
       "rightmost",
     ) ||
-    findValue(actuatorSection, ["S/N", "Serial No.", "Serial"], "first");
+    asLeftNth(["S/N", "Serial No.", "Serial"], 2);
 
   const actuatorModelSize =
     findValue(
@@ -833,6 +843,11 @@ export function extractFields(
       ],
       "rightmost",
     ) ||
+    // 2nd "Model / Size" IN THE AS LEFT COLUMN. The fallback below counts
+    // across both columns, and since as-found and as-left share y values that
+    // made hits[1] the as-left BODY row — which is how the valve's "U" ended up
+    // in Actuator model.
+    asLeftNth(["Model / Size", "Model Number", "Model/Size"], 2, 55) ||
     (() => {
       // If there are 2+ "Model / Size" labels, the second is actuator.
       // But stop here — the third would be the positioner.
@@ -849,17 +864,21 @@ export function extractFields(
       return "";
     })();
 
-  const actuatorActionHandwheel = findValue(
-    safe,
-    [
-      "Action / Handwheel",
-      "Actuator Action",
-      "Act. Action",
-      "Action/Handwheel",
-      "Action / H.W.",
-    ],
-    "rightmost",
-  );
+  const actuatorActionHandwheel =
+    // First — same reason as Trim: the lookup below truncates to "PDTC" and
+    // drops the "None" beside it.
+    asLeftNth(["Action/Handwheel", "Action / Handwheel"], 1, 55) ||
+    findValue(
+      safe,
+      [
+        "Action / Handwheel",
+        "Actuator Action",
+        "Act. Action",
+        "Action/Handwheel",
+        "Action / H.W.",
+      ],
+      "rightmost",
+    );
 
   const positionerMake =
     findValue(
@@ -872,7 +891,7 @@ export function extractFields(
       ],
       "rightmost",
     ) ||
-    findValue(positionerSection, ["Make", "Manufacturer", "Mfr."], "first");
+    asLeftNth(["Make", "Manufacturer", "Mfr."], 3);
 
   const positionerSerialNumber =
     findValue(
@@ -887,7 +906,7 @@ export function extractFields(
     ) ||
     // The reported bug: reports print a bare "S/N" under a "Positioner"
     // heading, and every prefixed label above misses.
-    findValue(positionerSection, ["S/N", "Serial No.", "Serial"], "first");
+    asLeftNth(["S/N", "Serial No.", "Serial"], 3);
 
   const positionerModelAction =
     findValue(
@@ -900,6 +919,9 @@ export function extractFields(
       ],
       "rightmost",
     ) ||
+    // "Model / Action" belongs to the positioner block and occurs once per
+    // column. Wide gap: model and action are two cells ("DVC6200" then "Direct").
+    asLeftNth(["Model / Action", "Model/Action"], 1, 55) ||
     // "Model / Action" is generic — don't let it match a valve/actuator row
     findValue(safe, ["Model / Action"], "rightmost", 5, [
       ...VALVE_OWNERS,
