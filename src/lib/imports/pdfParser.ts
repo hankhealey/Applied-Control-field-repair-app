@@ -4,6 +4,12 @@
 export interface ParsedPdfReport {
   filename: string;
   tagOrUnit: string;
+  /**
+   * IRIS asset ID, e.g. "2003245". Printed in the report's NOTES line rather
+   * than a labelled construction cell, so it is matched by pattern against the
+   * raw text in finish() — not by the positional label lookup extractFields uses.
+   */
+  assetId: string;
   customer: string;
   siteTitle: string;
   repairDate: string;
@@ -51,6 +57,20 @@ export interface ParsedPdfReport {
 /** True when an _aiError came from a provider rate limit rather than a real fault. */
 export function isRateLimit(aiError: string | undefined): boolean {
   return Boolean(aiError && /rate.?limit|429|too many requests/i.test(aiError));
+}
+
+/**
+ * IRIS asset ID out of the report's NOTES prose, e.g. "Asset ID 2003245".
+ * Tolerates "Asset ID:", "AssetID", and a value split across pdf.js text runs
+ * (hence \s* rather than a single literal space between the words).
+ *
+ * Matched by pattern rather than by label position: the asset ID is printed in
+ * free text, so there is no construction cell for findValue to anchor to.
+ * Returns "" when absent — plenty of reports have no asset ID, which is not an error.
+ */
+export function findAssetId(rawText: string): string {
+  const m = /\bAsset\s*ID\b\s*[:#]?\s*([0-9]{4,12})\b/i.exec(rawText ?? "");
+  return m ? m[1] : "";
 }
 
 /** A positioned text run from the PDF. Public for the learned field map. */
@@ -417,6 +437,66 @@ function findValue(
  * Find the "As Left" calibration row and return the value at column `colIdx`
  * (0-indexed from left after the row label).
  */
+/**
+ * True when `item` is a standalone component HEADING ("Positioner", "Device 1")
+ * rather than a labelled cell ("Positioner S/N"). Headings are how these reports
+ * express ownership when the rows beneath them use bare labels.
+ */
+function isSectionHeading(item: TItem, owners: readonly string[]): boolean {
+  const t = norm(item.str);
+  return owners.some((o) => {
+    const ow = norm(o);
+    // exact ("Positioner") or numbered ("Device 1"), never a prefixed cell
+    return t.toLowerCase() === ow.toLowerCase() ||
+      new RegExp(`^${ow.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\d+$`, "i").test(t);
+  });
+}
+
+/**
+ * The y-band of items belonging to one component's sub-block.
+ *
+ * These reports print a component heading and then bare labels beneath it:
+ *
+ *     Positioner
+ *       Make   FISHER
+ *       S/N    F002363859
+ *
+ * Ownership is expressed by VERTICAL POSITION, not by label text — so
+ * `isOwnedByOther` has nothing to bite on ("Make" contains no owner word) and
+ * the `rightmost` strategy degenerates to "last in document order" when every
+ * label shares an x. Scoping to the band between this component's heading and
+ * the next component's heading is what makes a bare "S/N" unambiguous.
+ *
+ * Returns [] when no heading is found, so callers fall through to their existing
+ * behaviour on reports that don't use this layout.
+ */
+function sectionScope(
+  items: TItem[],
+  owners: readonly string[],
+  allOwners: readonly (readonly string[])[],
+): TItem[] {
+  const heading = items
+    .filter((i) => isSectionHeading(i, owners))
+    .sort((a, b) => a.y - b.y)[0];
+  if (!heading) return [];
+
+  // The band ends at the next heading of ANY component below this one. Without
+  // this the positioner's scope would swallow every row to the end of the page.
+  const nextY = items
+    .filter(
+      (i) =>
+        i.page === heading.page &&
+        i.y > heading.y &&
+        allOwners.some((set) => isSectionHeading(i, set)) &&
+        !isSectionHeading(i, owners),
+    )
+    .reduce((min, i) => Math.min(min, i.y), Number.POSITIVE_INFINITY);
+
+  return items.filter(
+    (i) => i.page === heading.page && i.y > heading.y && i.y < nextY,
+  );
+}
+
 function findCalAL(items: TItem[], colIdx: number): string {
   const AL_LABELS = ["As Left", "AS LEFT", "As left"];
   const rows = items.filter((i) => AL_LABELS.includes(norm(i.str)));
@@ -513,7 +593,7 @@ export function mergeBlanks<T extends Record<string, unknown>>(
  * `findingsY` = y above which construction data lives.
  * `strategy` = how aggressive to be on concat.
  */
-function extractFields(
+export function extractFields(
   scope: TItem[],
   _allItems: TItem[],
   _pageWidth: number,
@@ -617,6 +697,14 @@ function extractFields(
   // lookup must never match an Actuator/Positioner row. This is how a Fisher
   // 667 actuator ended up in the valve model column.
   const NOT_VALVE = [...ACTUATOR_OWNERS, ...POSITIONER_OWNERS];
+
+  // Per-component y-bands, for reports that print bare labels under a heading.
+  // Empty when the report has no such headings, in which case every lookup below
+  // falls through to exactly the behaviour it had before.
+  const ALL_OWNER_SETS = [VALVE_OWNERS, ACTUATOR_OWNERS, POSITIONER_OWNERS];
+  const valveSection = sectionScope(safe, VALVE_OWNERS, ALL_OWNER_SETS);
+  const actuatorSection = sectionScope(safe, ACTUATOR_OWNERS, ALL_OWNER_SETS);
+  const positionerSection = sectionScope(safe, POSITIONER_OWNERS, ALL_OWNER_SETS);
   const valveMake =
     findValue(
       safe,
@@ -630,6 +718,11 @@ function extractFields(
       ],
       "rightmost",
     ) ||
+    // Bare "Make" under a "Valve"/"Body" heading, scoped to that band.
+    // Must precede the guarded whole-page fallback below: on a stacked layout
+    // every "Make" shares an x, `rightmost` degenerates to last-in-order, and
+    // the valve inherits whichever component is printed last.
+    findValue(valveSection, ["Make", "Manufacturer", "Mfr."], "first") ||
     // Generic "Make" must not match an Actuator/Positioner row
     findValue(safe, ["Make"], "rightmost", 5, NOT_VALVE);
 
@@ -646,6 +739,7 @@ function extractFields(
       ],
       "rightmost",
     ) ||
+    findValue(valveSection, ["S/N", "Serial No.", "Serial"], "first") ||
     // Generic "S/N" matches "Actuator S/N" / "Positioner S/N" by substring —
     // without this guard the valve inherits another component's serial.
     findValue(safe, ["S/N"], "rightmost", 5, NOT_VALVE);
@@ -708,17 +802,23 @@ function extractFields(
     "rightmost",
   );
 
-  const actuatorMake = findValue(
-    safe,
-    ["Actuator Make", "Actuator Manufacturer", "Actuator Mfr.", "Act. Make"],
-    "rightmost",
-  );
+  const actuatorMake =
+    findValue(
+      safe,
+      ["Actuator Make", "Actuator Manufacturer", "Actuator Mfr.", "Act. Make"],
+      "rightmost",
+    ) ||
+    // Bare "Make" under an "Actuator" heading. No prefixed text to guard on, so
+    // scope to the heading's band instead.
+    findValue(actuatorSection, ["Make", "Manufacturer", "Mfr."], "first");
 
-  const actuatorSerialNumber = findValue(
-    safe,
-    ["Actuator S/N", "Actuator Serial No.", "Actuator Serial", "Act. S/N"],
-    "rightmost",
-  );
+  const actuatorSerialNumber =
+    findValue(
+      safe,
+      ["Actuator S/N", "Actuator Serial No.", "Actuator Serial", "Act. S/N"],
+      "rightmost",
+    ) ||
+    findValue(actuatorSection, ["S/N", "Serial No.", "Serial"], "first");
 
   const actuatorModelSize =
     findValue(
@@ -761,27 +861,33 @@ function extractFields(
     "rightmost",
   );
 
-  const positionerMake = findValue(
-    safe,
-    [
-      "Positioner Make",
-      "Positioner Manufacturer",
-      "Positioner Mfr.",
-      "Pos. Make",
-    ],
-    "rightmost",
-  );
+  const positionerMake =
+    findValue(
+      safe,
+      [
+        "Positioner Make",
+        "Positioner Manufacturer",
+        "Positioner Mfr.",
+        "Pos. Make",
+      ],
+      "rightmost",
+    ) ||
+    findValue(positionerSection, ["Make", "Manufacturer", "Mfr."], "first");
 
-  const positionerSerialNumber = findValue(
-    safe,
-    [
-      "Positioner S/N",
-      "Positioner Serial No.",
-      "Positioner Serial",
-      "Pos. S/N",
-    ],
-    "rightmost",
-  );
+  const positionerSerialNumber =
+    findValue(
+      safe,
+      [
+        "Positioner S/N",
+        "Positioner Serial No.",
+        "Positioner Serial",
+        "Pos. S/N",
+      ],
+      "rightmost",
+    ) ||
+    // The reported bug: reports print a bare "S/N" under a "Positioner"
+    // heading, and every prefixed label above misses.
+    findValue(positionerSection, ["S/N", "Serial No.", "Serial"], "first");
 
   const positionerModelAction =
     findValue(
@@ -842,6 +948,9 @@ function extractFields(
 
   return {
     tagOrUnit,
+    // Filled by pattern in finish() — the asset ID lives in the NOTES prose,
+    // not in a labelled cell, so there is nothing positional to look up here.
+    assetId: "",
     customer,
     siteTitle,
     repairDate,
@@ -949,6 +1058,7 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     return {
       filename: file.name,
       tagOrUnit: "",
+      assetId: "",
       customer: "",
       siteTitle: "",
       repairDate: "",
@@ -997,6 +1107,10 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
   ): ParsedPdfReport => ({
     filename: file.name,
     ...result,
+    // Pattern, not position: the asset ID is printed in the NOTES prose
+    // ("Asset ID 2003245"), so a label lookup has nothing to anchor to.
+    // Never overwrite a value a pass already found.
+    assetId: result.assetId || findAssetId(rawText),
     _passCount: passCount,
     _rawText: rawText,
     _warnings: notes,

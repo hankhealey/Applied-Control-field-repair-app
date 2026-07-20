@@ -66,7 +66,16 @@ export class TokenBudget {
     return this.spends.reduce((sum, s) => sum + s.tokens, 0);
   }
 
-  /** Milliseconds until `tokens` would fit. 0 means send it now. */
+  /**
+   * Milliseconds until `tokens` would fit. 0 means send it now.
+   *
+   * Never returns a negative. It used to return -1 for a request larger than
+   * the whole per-minute budget, and the caller read that as "send immediately".
+   * That was right for the FIRST file — the server trims an oversized prompt to
+   * fit, so it lands — and wrong for every file after it, which then fired into
+   * an already-full minute and 429'd. An oversized request can still succeed;
+   * it just has to go into a CLEAR window, so wait for one.
+   */
   waitFor(tokens: number, now: number = Date.now()): number {
     const used = this.used(now);
     if (used + tokens <= this.limitPerMin) return 0;
@@ -78,12 +87,29 @@ export class TokenBudget {
       freed += s.tokens;
       if (freed >= need) return Math.max(0, s.at + 60_000 - now);
     }
-    // A single request bigger than the whole budget can never fit by waiting.
-    return -1;
+
+    // Bigger than the budget even with nothing else in flight: wait out the
+    // newest spend so the request meets an empty window.
+    const last = this.spends[this.spends.length - 1];
+    return last ? Math.max(0, last.at + 60_000 - now) : 0;
   }
 
   record(tokens: number, now: number = Date.now()): void {
     this.spends.push({ at: now, tokens });
+  }
+
+  /**
+   * Hand back a reservation whose request never reached the provider (network
+   * error, timeout, abort). Without this a failed send keeps its tokens booked
+   * for a full minute, so every file behind it waits for capacity that nothing
+   * consumed — the throttle punishing you for its own failure.
+   *
+   * Deliberately NOT called on a 429: the provider saw that request and counted
+   * it, so the reservation is real and waiting it out is correct.
+   */
+  release(tokens: number, at: number): void {
+    const i = this.spends.findIndex((s) => s.at === at && s.tokens === tokens);
+    if (i >= 0) this.spends.splice(i, 1);
   }
 
   reset(): void {

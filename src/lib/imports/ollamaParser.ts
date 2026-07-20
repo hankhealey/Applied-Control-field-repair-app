@@ -6,6 +6,10 @@ import type { ParsedPdfReport } from "./pdfParser";
 
 export const PDF_FIELDS: Array<{ key: keyof ParsedPdfReport; desc: string }> = [
   { key: "tagOrUnit", desc: "equipment tag or unit ID (e.g. PV-4176B)" },
+  {
+    key: "assetId",
+    desc: 'IRIS asset ID, digits only, usually in the NOTES line (e.g. "Asset ID 2003245")',
+  },
   { key: "customer", desc: "customer or client company name" },
   { key: "siteTitle", desc: "site, plant, or facility name" },
   {

@@ -28,7 +28,7 @@ import {
 import { applyEditPatch, type EditPatch } from "@/lib/imports/editOverrides";
 import { checkAiAvailable, enhanceWithAi, generateObservationsHtml } from "@/lib/imports/ollamaParser";
 import { isRateLimit, type ParsedPdfReport, parsePdfFile } from "@/lib/imports/pdfParser";
-import { estimateRequestTokens, groqBudget } from "@/lib/imports/tokenBudget";
+import { DEFAULT_TPM_LIMIT, estimateRequestTokens, groqBudget } from "@/lib/imports/tokenBudget";
 import { blankFieldsForRules, enforceBlankFields } from "@/lib/imports/ruleActions";
 import {
   deleteTrainingExample,
@@ -95,7 +95,17 @@ interface FileEntry {
   assetType: IrisAssetType;
   /** What training was sent with the last AI enhancement of this file. */
   training?: { examples: number; rules: number };
+  /**
+   * Rate-limit retries already spent on this file. A 429 means the AI never
+   * saw the document, so the file is silently regex-only — retrying is what
+   * the user would do by hand anyway, and doing it by hand starts every retry
+   * at once. Capped so a genuinely exhausted quota can't loop forever.
+   */
+  rateLimitRetries?: number;
 }
+
+/** How many times a rate-limited file re-queues itself before giving up. */
+const MAX_RATE_LIMIT_RETRIES = 2;
 
 /** The 11 IRIS asset types, derived from RULE_SCOPES (minus "All"). */
 const ASSET_TYPES = RULE_SCOPES.filter((s): s is IrisAssetType => s !== "All");
@@ -112,6 +122,13 @@ export default function ImportPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Serialises ALL parsing, across separate addFiles calls. */
   const parseQueue = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * Live mirror of `entries`. Queued work runs inside a closure captured when
+   * the file was added, so reading `entries` there returns a stale snapshot —
+   * and a retry counter read from a stale snapshot never increments, which
+   * would turn "retry twice" into an infinite loop.
+   */
+  const entriesRef = useRef<FileEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
 
   const [pendingType, setPendingType] = useState<IrisAssetType | null>(null);
@@ -130,6 +147,10 @@ export default function ImportPage() {
   const [ruleScope, setRuleScope] = useState<RuleScope>("All");
   const [rulesFilter, setRulesFilter] = useState<RuleScope | "Everything">("Everything");
   const [untypedTag, setUntypedTag] = useState<IrisAssetType>("Control Valve");
+
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
 
   useEffect(() => {
     checkAiAvailable().then(setAiAvailable);
@@ -170,15 +191,7 @@ export default function ImportPage() {
     // files in one at a time used to spawn a second concurrent loop, which
     // reintroduced the parallel-parse crash and let two files race the token
     // budget (both saw it as free, both fired, both 429'd).
-    parseQueue.current = parseQueue.current
-      .then(async () => {
-        for (const e of added) {
-          await parseFile(e.id, e.file, e.assetType);
-        }
-      })
-      .catch(() => {
-        // one file's failure must not break the queue for the next
-      });
+    for (const e of added) enqueue(e.id, e.file, e.assetType);
   }
 
   function setEntryAssetType(id: string, assetType: IrisAssetType) {
@@ -187,6 +200,8 @@ export default function ImportPage() {
 
   async function parseFile(id: string, file: File, assetType: IrisAssetType) {
     setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "parsing", statusMsg: "Extracting fields…", training: undefined } : e));
+    /** Set once the budget is reserved, so a failed send can hand it back. */
+    let reservation: { tokens: number; at: number } | null = null;
     try {
       let result = await parsePdfFile(file);
       // Type-scoped training: rules for this type or "All"
@@ -212,17 +227,20 @@ export default function ImportPage() {
             withObservations: true,
           });
           const wait = groqBudget.waitFor(est);
-          // wait < 0 means one request exceeds the whole budget; the server
-          // trims the prompt to fit, so send it rather than stall forever.
-          const goAt = Date.now() + Math.max(wait, 0);
+          // waitFor never returns negative now — an oversized request waits for
+          // a clear window rather than being sent immediately into a full one.
+          const goAt = Date.now() + wait;
           // Reserve at the moment the request will actually go, BEFORE waiting.
           // Recording afterwards left the budget looking free for the whole
           // wait, so anything starting meanwhile computed a wrong (too short)
           // timer and fired into the ceiling.
           groqBudget.record(est, goAt);
+          reservation = { tokens: est, at: goAt };
           if (wait > 0) {
             while (Date.now() < goAt) {
-              setMsg(`Waiting ${Math.ceil((goAt - Date.now()) / 1000)}s for token budget…`);
+              setMsg(
+                `Waiting ${Math.ceil((goAt - Date.now()) / 1000)}s — this file needs ~${est.toLocaleString()} of the ${DEFAULT_TPM_LIMIT.toLocaleString()} tokens/min budget`,
+              );
               await new Promise((r) => setTimeout(r, 1000));
             }
             setMsg("AI filling missing fields…");
@@ -230,17 +248,51 @@ export default function ImportPage() {
         }
 
         result = await enhanceWithAi(result, setMsg, chosenExamples, ruleTextsForPrompt(scopedRules));
+
+        // The request never reached Groq (network, timeout, bad key), so the
+        // tokens we booked were never spent. Hand them back — otherwise every
+        // file behind this one waits for capacity nothing consumed. A 429 is
+        // deliberately excluded: Groq saw that request and counted it.
+        if (reservation && result._aiError && !isRateLimit(result._aiError)) {
+          groqBudget.release(reservation.tokens, reservation.at);
+        }
       }
       // Deterministic enforcement: "leave X blank" rules clear fields the AI
       // and regex parser can't un-fill (empty AI answers never overwrite)
       result = enforceBlankFields(result, blankFieldsForRules(scopedRules.map((r) => r.text)));
       setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "done", result, statusMsg: undefined } : e));
+
+      // A rate limit means the AI never read the document — the file looks done
+      // but its rules and training never applied. Re-queue it instead of
+      // leaving the user to click Retry AI on each one, which is what caused
+      // the pile-up in the first place: hand-retries all start at once.
+      if (result._aiError && isRateLimit(result._aiError)) {
+        const spent = entriesRef.current.find((e) => e.id === id)?.rateLimitRetries ?? 0;
+        if (spent < MAX_RATE_LIMIT_RETRIES) {
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.id === id
+                ? { ...e, status: "pending", statusMsg: `Rate limited — retrying automatically (${spent + 1}/${MAX_RATE_LIMIT_RETRIES})`, rateLimitRetries: spent + 1 }
+                : e,
+            ),
+          );
+          enqueue(id, file, assetType);
+          return;
+        }
+        toast(
+          `${file.name}: still rate limited after ${MAX_RATE_LIMIT_RETRIES} retries — wait a minute, then hit Retry AI`,
+          "warning",
+        );
+        return;
+      }
+
       // A silent AI failure looks exactly like a successful regex-only run, so
       // say it out loud — the user's rules did not reach the model.
       if (result._aiError) {
-        toast(`${file.name}: ${result._aiError}`, isRateLimit(result._aiError) ? "warning" : "error");
+        toast(`${file.name}: ${result._aiError}`, "error");
       }
     } catch (err) {
+      if (reservation) groqBudget.release(reservation.tokens, reservation.at);
       setEntries((prev) => prev.map((e) => e.id === id ? { ...e, status: "error", error: String(err), statusMsg: undefined } : e));
     }
   }
@@ -254,6 +306,15 @@ export default function ImportPage() {
    * first: the edit overlay is applied ON TOP of the result, so a stale edit
    * silently beats whatever the rule just fixed and the row looks unchanged.
    */
+  /** Chain onto the ONE queue, so nothing ever parses in parallel. */
+  function enqueue(id: string, file: File, assetType: IrisAssetType) {
+    parseQueue.current = parseQueue.current
+      .then(() => parseFile(id, file, assetType))
+      .catch(() => {
+        // one file's failure must not break the queue for the next
+      });
+  }
+
   function reExtract(entry: FileEntry) {
     const hadEdits = Object.keys(editing[entry.id] ?? {}).length > 0;
     setEditing((prev) => {
@@ -261,7 +322,12 @@ export default function ImportPage() {
       delete next[entry.id];
       return next;
     });
-    parseFile(entry.id, entry.file, entry.assetType);
+    // Must go through the queue. Calling parseFile directly meant every click
+    // started at once: after a rate-limited batch you retry each file by hand,
+    // they all fire together, and they all get rate limited again — the exact
+    // loop the queue exists to prevent.
+    setEntries((prev) => prev.map((e) => e.id === entry.id ? { ...e, status: "pending", statusMsg: "Queued…" } : e));
+    enqueue(entry.id, entry.file, entry.assetType);
     if (hadEdits) toast("Manual edits cleared so the rules can take effect", "info");
   }
 
@@ -392,6 +458,15 @@ export default function ImportPage() {
   const displayColumns: Array<{ label: string; col?: CsvCol }> = showAllColumns
     ? allColumnLabels.map((label) => ({ label, col: mappedByHeader.get(label) }))
     : CSV_COLS.map((c) => ({ label: c.header, col: c }));
+
+  // Fields we extract that this asset type's IRIS template has no column for.
+  // Only Control Valve / Isolation Valve / MOV carry the Device 1 block; the
+  // other eight templates have none, so a positioner serial read off the PDF
+  // has nowhere to go and vanishes at export. Say so rather than dropping it
+  // silently — the column simply not being there reads as a bug.
+  const unmappableCols = CSV_COLS.map((c) => c.header).filter(
+    (h) => !allColumnLabels.includes(h),
+  );
 
   function exportLabel() {
     if (mergedResults.length === 1) return mergedResults[0].tagOrUnit || "import";
@@ -1012,6 +1087,26 @@ export default function ImportPage() {
                   </Button>
                 </div>
               </div>
+
+              {unmappableCols.length > 0 && (
+                <div
+                  className="mb-2 rounded-lg border px-3 py-2 text-xs"
+                  style={{
+                    background: "var(--color-warning-bg)",
+                    borderColor: "var(--color-warning-border)",
+                    color: "var(--color-warning-text)",
+                  }}
+                >
+                  <strong>
+                    {unmappableCols.length} extracted field
+                    {unmappableCols.length !== 1 ? "s have" : " has"} no column in the {tableType} IRIS
+                    template
+                  </strong>{" "}
+                  — {unmappableCols.join(", ")}. {unmappableCols.length !== 1 ? "These are" : "This is"}{" "}
+                  read from the PDF but will not appear in the exported CSV. Switch the file&rsquo;s asset
+                  type to Control Valve, Isolation Valve or Motor Operated Valve if it has a positioner.
+                </div>
+              )}
 
               <div
                 className="overflow-x-auto rounded-xl border"

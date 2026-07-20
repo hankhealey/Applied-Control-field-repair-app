@@ -5,7 +5,7 @@ import type { ParsedPdfReport } from "@/lib/imports/pdfParser";
 
 function report(overrides: Partial<ParsedPdfReport> = {}): ParsedPdfReport {
   return {
-    filename: "", tagOrUnit: "", customer: "", siteTitle: "", repairDate: "",
+    filename: "", tagOrUnit: "", assetId: "", customer: "", siteTitle: "", repairDate: "",
     technician: "", process: "", emrReference: "", crmodReference: "",
     scopeOfWork: "", valveMake: "", valveSerialNumber: "", valveModelSize: "",
     valveClassConnection: "", valvePackingConfiguration: "", valveTrimCharPort: "",

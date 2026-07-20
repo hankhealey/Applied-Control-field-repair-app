@@ -45,10 +45,20 @@ describe("TokenBudget — rolling 60s window", () => {
     expect(b.used(T0 + 500)).toBe(3000);
   });
 
-  it("reports -1 for a request that can never fit, instead of waiting forever", () => {
+  it("sends an over-budget request straight into an empty window", () => {
     const b = new TokenBudget(6000);
-    // A single 7000-token request exceeds the entire per-minute budget
-    expect(b.waitFor(7000, T0)).toBe(-1);
+    // A single 7000-token request exceeds the whole per-minute budget, but the
+    // server trims an oversized prompt to fit, so it CAN succeed — as long as
+    // nothing else is in flight. Don't stall it.
+    expect(b.waitFor(7000, T0)).toBe(0);
+  });
+
+  it("still makes an over-budget request wait when the window is dirty", () => {
+    // This case used to return -1, which the caller read as "send now". That is
+    // why every file after the first fired into a full minute and 429'd.
+    const b = new TokenBudget(6000);
+    b.record(7000, T0);
+    expect(b.waitFor(7000, T0 + 1000)).toBe(59_000);
   });
 
   it("drops spends that have aged out of the window", () => {

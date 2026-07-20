@@ -937,39 +937,118 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function buildObservationsHtml(p: ParsedPdfReport): string {
-  // AI-generated HTML takes priority — it contains full per-component findings
-  if (p.observationsHtml?.trim()) return p.observationsHtml;
+/** `<strong>Label:</strong> value` — the bolded-header run every line is built from. */
+function labelled(label: string, value: string): string {
+  return `<strong>${esc(label)}:</strong> ${esc(value)}`;
+}
 
-  // Fallback: build structured HTML from available fields
+/**
+ * Bulleted line inside a prose section.
+ *
+ * Deliberately `<p>&bull; …</p>` rather than `<ul><li>`: the only tags proven to
+ * survive the IRIS rich-text importer are the ones already shipping in this
+ * field (`<p>`, `<strong>`, `<br>`). Introducing a list element risks IRIS
+ * stripping it and collapsing every bullet onto one line, so the bullet is a
+ * character inside a paragraph we know renders.
+ */
+function bullet(inner: string): string {
+  return `<p>&bull; ${inner}</p>`;
+}
+
+/**
+ * Observations block for the IRIS records CSV, in the house format:
+ *
+ *   Customer: … | Tech: … | Asset ID: …
+ *   Valve: <make> <model/size>, <class/conn>  |  Actuator: <make> <model/size>, <action>
+ *   Scope: …
+ *   Findings:            • Component: …
+ *   Corrective Action:   • …
+ *   Test Data:           • Seat Leak: …
+ *
+ * Field headers are bolded so the block scans as a form rather than a wall of prose.
+ *
+ * **The header is deterministic and the model never writes it.** Customer, tech,
+ * asset ID and the equipment lines all exist as extracted fields, so building
+ * them here means the model cannot contradict the asset record it is describing
+ * (it used to emit the whole block, equipment line included). The AI supplies
+ * only the three prose sections — Findings, Corrective Action, Test Data — which
+ * live in the report as free text and have no fields to read from.
+ *
+ * A block with no AI prose is still valid and still useful: it degrades to the
+ * header plus whatever test data was extracted, rather than emitting empty
+ * section headings.
+ */
+export function buildObservationsHtml(p: ParsedPdfReport): string {
   const chunks: string[] = [];
 
-  // ── Observations & Findings ─────────────────────────────────────────────────
-  const findingLines: string[] = [];
-  if (p.scopeOfWork) findingLines.push(`Scope of Work: ${p.scopeOfWork}`);
-  const actuatorDesc = [p.actuatorMake, p.actuatorModelSize].filter(Boolean).join(" ");
-  if (actuatorDesc) findingLines.push(`Actuator: ${actuatorDesc}`);
-  const positionerDesc = [p.positionerMake, p.positionerModelAction].filter(Boolean).join(" ");
-  if (positionerDesc) findingLines.push(`Positioner: ${positionerDesc}`);
+  // ── Line 1: who ───────────────────────────────────────────────────────────
+  const who = [
+    p.customer && labelled("Customer", p.customer),
+    p.technician && labelled("Tech", p.technician),
+    p.assetId && labelled("Asset ID", p.assetId),
+  ].filter(Boolean);
+  if (who.length) chunks.push(`<p>${who.join(" | ")}</p>`);
 
-  if (findingLines.length > 0) {
-    chunks.push(`<p><strong>Observations &amp; Findings</strong></p>`);
-    findingLines.forEach((l) => chunks.push(`<p>${esc(l)}</p>`));
+  // ── Line 2: what ──────────────────────────────────────────────────────────
+  // "VELAN 12\" Butterfly, 300 RF Flg" — make and model/size join with a space,
+  // class/connection is a separate clause.
+  const valveDesc = [
+    [p.valveMake, p.valveModelSize].filter(Boolean).join(" "),
+    p.valveClassConnection,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const actuatorDesc = [
+    [p.actuatorMake, p.actuatorModelSize].filter(Boolean).join(" "),
+    p.actuatorActionHandwheel,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const equipment = [
+    valveDesc && labelled("Valve", valveDesc),
+    actuatorDesc && labelled("Actuator", actuatorDesc),
+  ].filter(Boolean);
+  if (equipment.length) chunks.push(`<p>${equipment.join(" | ")}</p>`);
+
+  // Positioner only earns a line when present — most reports have no DVC.
+  const positionerDesc = [p.positionerMake, p.positionerModelAction].filter(Boolean).join(" ");
+  if (positionerDesc) chunks.push(`<p>${labelled("Device", positionerDesc)}</p>`);
+
+  // ── Line 3: why ───────────────────────────────────────────────────────────
+  if (p.scopeOfWork) chunks.push(`<p>${labelled("Scope", p.scopeOfWork)}</p>`);
+
+  // ── AI prose sections: Findings / Corrective Action ───────────────────────
+  // Model output is trusted for these three sections only. It is emitted as-is
+  // because the prompt constrains it to <p>/<strong>/<br>; escaping it here
+  // would render the tags as literal text.
+  const prose = p.observationsHtml?.trim();
+  if (prose) {
+    chunks.push(`<p><br></p>`);
+    chunks.push(prose);
   }
 
-  // ── Work Performed Summary ─────────────────────────────────────────────────
-  const workLines: string[] = [];
-  const calParts: string[] = [];
-  if (p.benchSetAsLeft) calParts.push(`Bench Set (As Left): ${p.benchSetAsLeft}`);
-  if (p.supplyPressureAsLeft) calParts.push(`Supply Pressure (As Left): ${p.supplyPressureAsLeft} psi`);
-  if (p.failActionAsLeft) calParts.push(`Fail Action: ${p.failActionAsLeft}`);
-  if (calParts.length > 0) workLines.push(`Actuator – ${calParts.join(" | ")}`);
-  if (p.seatLeakClass) workLines.push(`Valve – Seat Leak Class: ${p.seatLeakClass}`);
+  // ── Test Data — FALLBACK ONLY ─────────────────────────────────────────────
+  // The AI writes its own Test Data section, because the readings the format
+  // wants (Pkg/Gst, Hydro) live in POST VALVE REPAIR TEST DATA as free text and
+  // have no extracted fields. Only seat leak class does. So when AI prose is
+  // present it owns this section outright; emitting the extracted values too
+  // would print the seat leak class twice in a customer-visible IRIS record.
+  //
+  // With no AI prose, these calibration values are all we have, and a block
+  // with real measurements beats one with none.
+  if (!prose) {
+    const testLines: string[] = [];
+    if (p.seatLeakClass) testLines.push(labelled("Seat Leak", p.seatLeakClass));
+    if (p.benchSetAsLeft) testLines.push(labelled("Bench Set (As Left)", p.benchSetAsLeft));
+    if (p.supplyPressureAsLeft)
+      testLines.push(labelled("Supply Pressure (As Left)", `${p.supplyPressureAsLeft} psi`));
+    if (p.failActionAsLeft) testLines.push(labelled("Fail Action", p.failActionAsLeft));
 
-  if (workLines.length > 0) {
-    chunks.push(`<p><br></p>`);
-    chunks.push(`<p><strong>Work Performed Summary</strong></p>`);
-    workLines.forEach((l) => chunks.push(`<p>${esc(l)}</p>`));
+    if (testLines.length) {
+      chunks.push(`<p><br></p>`);
+      chunks.push(`<p><strong>Test Data:</strong></p>`);
+      testLines.forEach((l) => chunks.push(bullet(l)));
+    }
   }
 
   return chunks.join("");

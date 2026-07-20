@@ -58,19 +58,26 @@ interface TrainingExample {
  * The observations structure, shared by the merged extraction prompt and the
  * standalone 70b prose call so both produce an identical block shape.
  */
-const OBSERVATIONS_STRUCTURE = `<p><strong>Observations &amp; Findings</strong></p>
-<p>Body: [1-2 sentences: condition found and work done to valve body/bonnet]</p>
-<p>Trim: [1-2 sentences: condition found and work done to trim/plug/stem/seat/cage]</p>
-<p>Actuator: [1-2 sentences: condition found and work done to actuator]</p>
-<p>Positioner: [1-2 sentences: condition found and work done to positioner/DVC]</p>
-<p>Tubing / Airset: [1-2 sentences: condition found and work done to tubing, air filter regulator]</p>
+/**
+ * The model writes ONLY these two prose sections.
+ *
+ * Customer, tech, asset ID, valve, actuator and scope are extracted fields, and
+ * buildObservationsHtml (src/lib/exports/iris.ts) renders them deterministically
+ * above whatever comes back from here. The model used to emit the equipment line
+ * too, which let it describe a valve the asset record contradicted. Keeping it
+ * out of the header is what makes that impossible rather than merely unlikely.
+ */
+const OBSERVATIONS_STRUCTURE = `<p><strong>Findings:</strong></p>
+<p>&bull; <strong>[Component]:</strong> [condition found — one clause, not a sentence]</p>
+<p>&bull; <strong>[Component]:</strong> [condition found, or "Worn &rarr; Replaced"]</p>
 <p><br></p>
-<p><strong>Work Performed Summary</strong></p>
-<p>Body – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Trim – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Actuator – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Positioner – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>
-<p>Tubing / Airset – As Found: [brief condition] | Action: [brief action] | As Left: [brief result]</p>`;
+<p><strong>Corrective Action:</strong></p>
+<p>&bull; [what was actually done]</p>
+<p>&bull; [what was actually done]</p>
+<p><br></p>
+<p><strong>Test Data:</strong></p>
+<p>&bull; <strong>[Test name]:</strong> [pressure/class/duration and PASS or FAIL]</p>
+<p>&bull; <strong>[Test name]:</strong> [result]</p>`;
 
 function buildPrompt(
   fields: Array<{ key: string; desc: string }>,
@@ -153,15 +160,22 @@ ${rawText.slice(0, newTextLimit)}
 ${
   withObservations
     ? `
-Also write an "observationsHtml" summary of this SAME report text, using EXACTLY
-this structure (omit any component line if that component is not mentioned):
+Also write an "observationsHtml" block summarising this SAME report text, using
+EXACTLY this structure:
 
 ${OBSERVATIONS_STRUCTURE}
 
 Observations rules:
 - Use ONLY information found in the report text above. Never invent findings.
-- Omit any component line (from both sections) if that component is not mentioned.
-- Only <p>, <strong> and <br> tags. No markdown, no code fences.
+- Do NOT write customer, technician, asset ID, valve, actuator or scope lines.
+  Those are rendered separately from extracted data and will be duplicated.
+  Start at "Findings:".
+- [Component] is whatever the report actually names (Valve, Disc/Seat, Gasket
+  Surface, Actuator, Bushings, Packing, Trim, Seat Ring...). Not a fixed list.
+  Use one bullet per component; omit the section if the report has none.
+- Keep bullets terse: a clause, not a sentence. "Worn &rarr; Replaced" over
+  "The bushings were found to be worn and were subsequently replaced."
+- Only <p>, <strong> and <br> tags. No markdown, no code fences, no <ul>/<li>.
 - Encode & as &amp; inside text content.
 `
     : ""
@@ -178,14 +192,21 @@ Do not guess or invent values — only extract what is clearly present in the te
 function buildObservationsPrompt(rawText: string): string {
   return `You are analyzing a valve repair report. Generate an HTML observations block for the Iris asset management system.
 
-Use EXACTLY this structure (omit any component line if that component is not mentioned in the report):
+Use EXACTLY this structure:
 
 ${OBSERVATIONS_STRUCTURE}
 
 Rules:
 - Use ONLY information found in the repair report text. Never invent or guess findings.
-- Omit any component line (from both sections) if that component is not mentioned.
-- No markdown, no extra HTML tags, no code fences — only <p>, <strong>, and <br>.
+- Do NOT write customer, technician, asset ID, valve, actuator or scope lines.
+  Those are rendered separately from extracted data and would be duplicated.
+  Start at "Findings:".
+- [Component] is whatever the report actually names (Valve, Disc/Seat, Gasket
+  Surface, Actuator, Bushings, Packing, Trim, Seat Ring...). Not a fixed list.
+  One bullet per component; omit a section entirely if the report has nothing for it.
+- Keep bullets terse: a clause, not a sentence. "Worn &rarr; Replaced" over
+  "The bushings were found to be worn and were subsequently replaced."
+- No markdown, no code fences, no <ul>/<li> — only <p>, <strong>, and <br>.
 - Encode & as &amp; inside text content.
 - Return ONLY the HTML block. No explanation, no preamble.
 
