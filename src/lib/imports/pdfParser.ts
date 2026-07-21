@@ -636,10 +636,17 @@ export function extractFields(
     strategy,
   );
 
+  // "Tech" first so the report-header cell wins. The label "Technician" is a
+  // substring of "As Left Calibration Technician" and "Test Date / Technician",
+  // both lower on the page — matching those returned the calibration tech
+  // instead of the service tech named in the header. The excludeOwners reject
+  // any tech label that belongs to the calibration or test rows.
   const technician = findValue(
     scope,
-    ["Technician", "Tech", "Tech:", "Completed By", "Service Tech"],
+    ["Tech", "Technician", "Tech:", "Completed By", "Service Tech"],
     strategy,
+    5,
+    ["Calibration", "Witness", "Test", "Date", "Signature"],
   );
 
   const process = findValue(

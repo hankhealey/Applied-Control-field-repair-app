@@ -97,6 +97,17 @@ describe("AS LEFT is preferred over AS FOUND", () => {
   });
 });
 
+describe("technician is the service tech, not the calibration tech", () => {
+  it("reads the header Tech, not As Left Calibration Technician", () => {
+    // Header "Tech" = PAT MORGAN. Calibration + test rows = SAM RIVERA, lower on
+    // the page — "Technician" is a substring of "Calibration Technician", so the
+    // old lookup took that one. (Both names are fixture redactions.)
+    const r = parse();
+    expect(r.technician).toBe("PAT MORGAN");
+    expect(r.technician).not.toBe("SAM RIVERA");
+  });
+});
+
 describe("scorecard", () => {
   it("extracts every AS LEFT construction field", () => {
     const r = parse() as Record<string, string>;

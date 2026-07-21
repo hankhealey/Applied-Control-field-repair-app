@@ -229,6 +229,33 @@ export function splitModelSize(combined: string): { model: string; size: string 
   return { model: s, size: s };
 }
 
+/** Positioner instrument actions, as printed in the "Model / Action" cell. */
+const POSITIONER_ACTIONS = /^(direct|reverse|indirect|rev\.?|dir\.?)$/i;
+
+/**
+ * Split a positioner "Model / Action" value into its two IRIS columns.
+ * "DVC6200 Direct" → model "DVC6200", action "Direct".
+ *
+ * The report prints model and action as two cells in one row, so the parser
+ * carries them joined. Device 1 Model number (col 82) wants only the model and
+ * Instrument action (col 94) only the action — writing the joined value to both
+ * put "DVC6200" in the action column and, once two-cell values stopped
+ * truncating, "DVC6200 Direct" in the model column.
+ *
+ * Only splits a trailing word that is a known action, so a model with a space
+ * in it (or no action at all) is left whole in the model column.
+ */
+export function splitModelAction(combined: string): { model: string; action: string } {
+  const s = (combined ?? "").trim();
+  if (!s) return { model: "", action: "" };
+  const parts = s.split(/\s+/);
+  const last = parts[parts.length - 1];
+  if (parts.length >= 2 && POSITIONER_ACTIONS.test(last)) {
+    return { model: parts.slice(0, -1).join(" "), action: last };
+  }
+  return { model: s, action: "" };
+}
+
 // Returns exactly 153 values in column order
 export function reportToRow(r: RepairReport): string[] {
   const [benchLow, benchHigh] = splitBenchSet(
@@ -241,6 +268,9 @@ export function reportToRow(r: RepairReport): string[] {
   );
   const { model: actuatorModel, size: actuatorSize } = splitModelSize(
     r.actuatorModelSize || "",
+  );
+  const { model: deviceModel, action: deviceAction } = splitModelAction(
+    r.positionerModelAction || "",
   );
 
   return [
@@ -335,7 +365,7 @@ export function reportToRow(r: RepairReport): string[] {
     r.positionerMake ? "Positioner" : "", // [79] Type
     "", // [80] Type (Other)
     r.positionerMake, // [81] Manufacturer
-    r.positionerModelAction, // [82] Model number
+    deviceModel, // [82] Model number
     "", // [83] Model number (other)
     r.positionerSerialNumber, // [84] Serial number
     "", // [85] Vendor asset Id
@@ -347,7 +377,7 @@ export function reportToRow(r: RepairReport): string[] {
     "", // [91] Supply fluid
     "", // [92] Other supply fluid
     "", // [93] Output pressure
-    r.positionerModelAction, // [94] Instrument action
+    deviceAction, // [94] Instrument action
     "",
     "",
     "",
