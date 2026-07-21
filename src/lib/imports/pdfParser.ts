@@ -73,6 +73,30 @@ export function findAssetId(rawText: string): string {
   return m ? m[1] : "";
 }
 
+/**
+ * A warning when a report clearly HAS construction data but the parser matched
+ * none of it — the loudest symptom of an unrecognised layout (e.g. the AS-LEFT
+ * column geometry bet in asLeftColumn failing on a new template).
+ *
+ * We cannot auto-detect a wrong-COLUMN read (a far-right size cell and an
+ * as-left value column look identical to geometry), but a total construction
+ * miss is unambiguous: construction labels present, zero component makes out.
+ * Returns null when extraction looks healthy. Pure + exported so it is unit-
+ * testable without pdf.js.
+ */
+export function constructionMissWarning(
+  rawText: string,
+  makes: { valveMake?: string; actuatorMake?: string; positionerMake?: string },
+): string | null {
+  const hasLabels = /\b(make|brand|manufacturer|model\s*\/\s*size)\b/i.test(rawText ?? "");
+  const anyMake = Boolean(
+    makes.valveMake?.trim() || makes.actuatorMake?.trim() || makes.positionerMake?.trim(),
+  );
+  return hasLabels && !anyMake
+    ? "Construction fields did not extract — this report's layout wasn't recognised. Review every value by eye before exporting; the AI pass may still fill them."
+    : null;
+}
+
 /** A positioned text run from the PDF. Public for the learned field map. */
 export interface TextItem {
   str: string;
@@ -463,6 +487,20 @@ function findValue(
  */
 
 /** Items in the AS LEFT column. AS FOUND occupies the left half of the page. */
+/**
+ * Items in the AS LEFT (post-repair) column.
+ *
+ * GEOMETRY ASSUMPTION, verified on 3 real report templates: when a report shows
+ * CONSTRUCTION (AS FOUND) and (AS LEFT) side by side, AS LEFT is the RIGHT half.
+ * A template that lays the two blocks out differently — AS LEFT on the left, or
+ * a single centred block — would read the wrong column here with NO error.
+ *
+ * That silent-wrong risk is why parsePdfFile emits a warning when construction
+ * labels are present but no makes extract (see finish() below): we cannot tell a
+ * far-right "size" sub-cell from an as-left value column by geometry alone, so a
+ * clever auto-fix would break the two-cell reads that work today. A visible
+ * "review this report" warning is the honest guard.
+ */
 function asLeftColumn(items: TItem[], pageWidth: number): TItem[] {
   return items.filter((i) => i.x >= pageWidth / 2);
 }
@@ -1149,17 +1187,23 @@ export async function parsePdfFile(file: File): Promise<ParsedPdfReport> {
     result: Omit<ParsedPdfReport, "filename" | "_passCount" | "_warnings">,
     passCount: number,
     notes: string[],
-  ): ParsedPdfReport => ({
-    filename: file.name,
-    ...result,
-    // Pattern, not position: the asset ID is printed in the NOTES prose
-    // ("Asset ID 2003245"), so a label lookup has nothing to anchor to.
-    // Never overwrite a value a pass already found.
-    assetId: result.assetId || findAssetId(rawText),
-    _passCount: passCount,
-    _rawText: rawText,
-    _warnings: notes,
-  });
+  ): ParsedPdfReport => {
+    // Layout-miss guard: warn when the report has construction data but none
+    // extracted, rather than exporting whatever leaked out as if it were read
+    // correctly. See constructionMissWarning.
+    const miss = constructionMissWarning(rawText, result);
+    return {
+      filename: file.name,
+      ...result,
+      // Pattern, not position: the asset ID is printed in the NOTES prose
+      // ("Asset ID 2003245"), so a label lookup has nothing to anchor to.
+      // Never overwrite a value a pass already found.
+      assetId: result.assetId || findAssetId(rawText),
+      _passCount: passCount,
+      _rawText: rawText,
+      _warnings: miss ? [...notes, miss] : notes,
+    };
+  };
 
   // ── Pass 1: Standard extraction from page 1 ──────────────────────────────
   const scope1 = page1.length > 5 ? page1 : all; // fall back to all if page1 is sparse

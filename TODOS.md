@@ -77,3 +77,24 @@ fix-list residue — verified defects with obvious fixes that just need recordin
   - **Cons:** Adds a control that does nothing until you save an example — so it needs the empty-state copy the rules panel already has.
   - **Context:** Found by /plan-design-review 2026-07-19 (Pass 2). Effort: human ~30min / CC ~5min.
   - **Depends on:** nothing.
+
+## Extraction robustness (from /plan-eng-review 2026-07-19)
+
+Deferred from the eng review of the accuracy work. The layout-miss WARNING shipped
+(constructionMissWarning in pdfParser.ts); these are the rest.
+
+- [ ] **Replace the fallback ladder with a declarative label→field table**
+  - **What:** The construction extraction is a 12-rung fallback ladder (`asLeftNth([...], N)` at pdfParser.ts:746-947, each field trying prefixed → ordinal → guarded whole-page). The design doc's Approach A is a flat `{component, labels, occurrence, field}` table the extractor reads. Convert the ladder to that table.
+  - **Why:** Every new report template adds rungs to the ladder (branching code); a table adds rows (data). It also kills the DRY finding (12 near-identical call sites) and makes the label sets reviewable in one place.
+  - **Pros:** Flat, reviewable, testable per-row; new templates are data not code; DRY.
+  - **Cons:** It's a rewrite of proven-correct code (currently 32/33). Real regression risk — must keep the scorecard green through the change. Do NOT do this right before a work deadline.
+  - **Context:** Found by /plan-eng-review 2026-07-19 (Architecture A2, Code Quality C2). The scorecard test (scorecard.test.ts) is the safety net — the refactor is only safe because that locks the measured behavior. Effort: human ~1 day / CC ~2h.
+  - **Depends on:** the scorecard staying green; ideally 1-2 more report fixtures first.
+
+- [ ] **Add a fixture for a labels-left, two-value-column layout**
+  - **What:** nthInAsLeft's fallback (pdfParser.ts:513) reads full-width when labels sit left of centre. On a hypothetical report with labels on the left AND both AS FOUND and AS LEFT value columns to the right, it would grab the AS FOUND value (leftmost), not AS LEFT. No such report exists in the 3 fixtures, so it's untested.
+  - **Why:** It's the one construction-extraction path with zero coverage, and it's a silent-wrong path (returns a plausible-but-wrong value).
+  - **Pros:** Closes the last coverage gap in the extraction ladder.
+  - **Cons:** Needs a real report of that shape to build the fixture honestly — inventing one risks encoding a wrong assumption (the exact mistake that shipped a broken fix earlier this week).
+  - **Context:** Found by /plan-eng-review 2026-07-19 (Test gap). The constructionMissWarning guard partially covers the total-miss case, but not the partial-wrong-column case. Effort: human ~1h / CC ~15min, once a matching report exists.
+  - **Depends on:** a real report with that layout.
