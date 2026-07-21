@@ -1185,14 +1185,27 @@ export default function ImportPage() {
                           style={{ borderTop: rowIdx > 0 ? "1px solid var(--border)" : undefined }}
                         >
                           <td
-                            className="sticky left-0 z-10 px-3 py-1.5 font-medium border-r whitespace-nowrap"
+                            className="sticky left-0 z-10 px-3 py-1.5 font-medium border-r"
                             style={{
                               background: "var(--bg-card)",
                               borderColor: "var(--border)",
                               color: "var(--text-primary)",
                             }}
                           >
-                            {e.file.name.replace(/\.pdf$/i, "")}
+                            <div className="whitespace-nowrap">{e.file.name.replace(/\.pdf$/i, "")}</div>
+                            <button
+                              type="button"
+                              onClick={() => saveExample(e)}
+                              title="Save your corrections on this row as a training example. Correct a cell first — unchanged rows have nothing to teach."
+                              className="mt-1 rounded-lg border px-2 py-0.5 text-[10px] whitespace-nowrap transition-colors"
+                              style={{
+                                borderColor: "var(--color-info-border)",
+                                color: "var(--color-info-text)",
+                                background: "var(--color-info-bg)",
+                              }}
+                            >
+                              + Train AI
+                            </button>
                           </td>
                           {displayColumns.map(({ label, col }) => {
                             const isMapped = Boolean(col);
