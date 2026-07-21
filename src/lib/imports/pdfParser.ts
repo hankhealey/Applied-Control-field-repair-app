@@ -468,13 +468,24 @@ function asLeftColumn(items: TItem[], pageWidth: number): TItem[] {
 }
 
 /**
- * Value of the Nth occurrence of a bare label within the AS LEFT column,
- * counting top to bottom. `occurrence` is 1-based: 1 = Body, 2 = Actuator,
- * 3 = Positioner.
+ * Value of the Nth occurrence of a bare label, reading the value to its right.
+ * `occurrence` is 1-based: 1 = Body, 2 = Actuator, 3 = Positioner.
+ *
+ * Two label layouts, tried in order:
+ *
+ *  1. Labels live in the AS LEFT column (right half). This is the two-column
+ *     layout — CONSTRUCTION (AS FOUND) and (AS LEFT) side by side, each with its
+ *     own labels. Scoping to the right half gives the AS LEFT value.
+ *
+ *  2. If no label is found in the right half, the report prints ONE shared label
+ *     column left of centre with a single value column on the right. Match the
+ *     label across the full width and read rightward. This fallback fires ONLY
+ *     when the right half had no such label, so the two-column layouts above are
+ *     never affected by it.
  *
  * Matches the label EXACTLY (not by substring) so a bare "Make" never picks up
- * "Actuator Make" on a report that does prefix its labels — those are handled
- * by the prefixed lookups that run before this.
+ * "Actuator Make" on a report that prefixes its labels — those are handled by
+ * the prefixed lookups that run before this.
  */
 function nthInAsLeft(
   items: TItem[],
@@ -483,18 +494,23 @@ function nthInAsLeft(
   pageWidth: number,
   maxGap = 22,
 ): string {
-  const col = asLeftColumn(items, pageWidth);
-  for (const label of labels) {
-    const lnorm = norm(label).toLowerCase();
-    const hits = col
-      .filter((i) => norm(i.str).toLowerCase() === lnorm)
-      .sort((a, b) => a.y - b.y);
-    if (hits.length < occurrence) continue;
-    const right = rightOf(col, hits[occurrence - 1]);
-    const val = right.length ? buildValue(right, 5, maxGap) : "";
-    if (val) return val;
-  }
-  return "";
+  const readNth = (scope: TItem[]): string => {
+    for (const label of labels) {
+      const lnorm = norm(label).toLowerCase();
+      const hits = scope
+        .filter((i) => norm(i.str).toLowerCase() === lnorm)
+        .sort((a, b) => a.y - b.y);
+      if (hits.length < occurrence) continue;
+      // Read from the full row, not the scope, so a label found in the left
+      // column can still reach a value on the right.
+      const right = rightOf(items, hits[occurrence - 1]);
+      const val = right.length ? buildValue(right, 5, maxGap) : "";
+      if (val) return val;
+    }
+    return "";
+  };
+
+  return readNth(asLeftColumn(items, pageWidth)) || readNth(items);
 }
 
 function findCalAL(items: TItem[], colIdx: number): string {
@@ -727,7 +743,7 @@ export function extractFields(
     // Must precede the guarded whole-page fallback below: on a stacked layout
     // every "Make" shares an x, `rightmost` degenerates to last-in-order, and
     // the valve inherits whichever component is printed last.
-    asLeftNth(["Make", "Manufacturer", "Mfr."], 1) ||
+    asLeftNth(["Make", "Brand", "Manufacturer", "Mfr."], 1) ||
     // Generic "Make" must not match an Actuator/Positioner row
     findValue(safe, ["Make"], "rightmost", 5, NOT_VALVE);
 
@@ -827,7 +843,7 @@ export function extractFields(
     ) ||
     // Bare "Make" under an "Actuator" heading. No prefixed text to guard on, so
     // scope to the heading's band instead.
-    asLeftNth(["Make", "Manufacturer", "Mfr."], 2);
+    asLeftNth(["Make", "Brand", "Manufacturer", "Mfr."], 2);
 
   const actuatorSerialNumber =
     findValue(
@@ -898,7 +914,7 @@ export function extractFields(
       ],
       "rightmost",
     ) ||
-    asLeftNth(["Make", "Manufacturer", "Mfr."], 3);
+    asLeftNth(["Make", "Brand", "Manufacturer", "Mfr."], 3);
 
   const positionerSerialNumber =
     findValue(

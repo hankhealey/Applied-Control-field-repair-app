@@ -1,5 +1,26 @@
 # Test fixtures
 
+Real pdf.js text runs from real Applied Control repair reports, captured exactly
+as `extractTextItems` produces them, with customer / technician / serial strings
+redacted. Coordinates, widths, ordering and every structural property are
+untouched — only the values changed.
+
+Four fixtures across **three distinct report layouts**, which is the whole point:
+the reports are not one template. `scorecard.test.ts` runs the real parser
+against three of them and holds a measured score (32/33) so any regression names
+the field it broke.
+
+| Fixture | Layout | Notes |
+|---|---|---|
+| `fv4101-items.json`  | two-column, labels in each half | the original, `Make` labels |
+| `fv4101b-items.json` | **one shared label column left of centre**, single value column | all three serials DIFFER — exposes wrong-row binding |
+| `fv101-items.json`   | two-column, labels say **`Brand`** not `Make`, inline component headings | distinct serials |
+| `pv148-items.json`   | same as fv101 | 667 is the actuator model (origin of the 667 bug) |
+
+Serials in the multi-report fixtures are redacted to `SNBODY0001` / `SNACTR0002`
+/ `SNPOS00003` — kept **distinct per component** on purpose, because equal
+serials are what hide wrong-row binding.
+
 ## `fv4101-items.json`
 
 Real pdf.js text runs from an Applied Control repair report (FV-4101), captured
