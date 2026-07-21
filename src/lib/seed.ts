@@ -326,18 +326,38 @@ const findings: RepairFinding[] = [
   },
 ];
 
-export async function ensureSeeded() {
-  if (seeded) return;
+// Share ONE in-flight seed across concurrent callers. ensureSeeded is invoked
+// from more than one place, and React's dev double-invoke fires it twice at
+// once — both calls saw an empty table, both inserted the same keys, and the
+// second threw "Key already exists" from bulkAdd. Assigning the promise before
+// any await means the second caller awaits the first run instead of racing it.
+let seedPromise: Promise<void> | null = null;
+
+async function doSeed(): Promise<void> {
   const [siteCount, reportCount] = await Promise.all([
     db.sites.count(),
     db.reports.count(),
   ]);
+  // bulkPut/put (upsert) rather than bulkAdd/add: idempotent, so even a stray
+  // concurrent run can't collide. Guarded by the count so user edits to an
+  // already-seeded table are never overwritten.
   if (siteCount === 0) {
-    await db.sites.bulkAdd(sites);
+    await db.sites.bulkPut(sites);
   }
   if (reportCount === 0) {
-    await db.reports.add(report);
-    await db.findings.bulkAdd(findings);
+    await db.reports.put(report);
+    await db.findings.bulkPut(findings);
   }
   seeded = true;
+}
+
+export function ensureSeeded(): Promise<void> {
+  if (seeded) return Promise.resolve();
+  if (!seedPromise) {
+    seedPromise = doSeed().catch((err) => {
+      seedPromise = null; // let a later call retry rather than cache the failure
+      throw err;
+    });
+  }
+  return seedPromise;
 }

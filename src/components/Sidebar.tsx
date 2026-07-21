@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 function RRIcon({ size = 38, active = false }: { size?: number; active?: boolean }) {
   const c1 = active ? "#F59E0B" : "#44403C";
@@ -262,10 +262,16 @@ export default function Sidebar() {
   const isIrisImport = pathname.startsWith("/iris-import");
   const isHome = !isImport && !isSites && !isIrisImport;
 
-  const [open, setOpen] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return window.innerWidth >= 640;
-  });
+  // Start open on BOTH server and client so the first render matches — reading
+  // window.innerWidth during render made the server (always open) disagree with
+  // the client (open only ≥640px) and threw a hydration error. Narrow down after
+  // mount instead. No visible flash: below 640px the desktop rail is CSS-hidden
+  // (`hidden sm:block`), so collapsing it changes nothing the user can see.
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    setOpen(window.innerWidth >= 640);
+  }, []);
 
   const glassRail: React.CSSProperties = {
     background: "var(--sidebar-glass-bg)",
