@@ -1,7 +1,22 @@
 import type { NextRequest } from "next/server";
 import { getIp } from "@/lib/ip";
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+// AI provider — Groq by default, swappable to any OpenAI-compatible API
+// (NVIDIA NIM, OpenRouter, Together, a local server) with env vars only.
+// To point at NVIDIA's free tier, set in .env.local and Vercel:
+//   AI_BASE_URL=https://integrate.api.nvidia.com/v1
+//   AI_MODEL=meta/llama-3.1-8b-instruct
+//   AI_MODEL_PROSE=meta/llama-3.3-70b-instruct
+//   AI_API_KEY=<your nvidia key>
+//   AI_TPM_LIMIT=<nvidia's tokens-per-minute; the throttle paces to this>
+// Leave them unset to stay on Groq. Voice transcription stays on GROQ_API_KEY
+// (see api/transcribe) regardless, so swapping this does not break dictation.
+const AI_BASE_URL = (process.env.AI_BASE_URL ?? "https://api.groq.com/openai/v1").replace(/\/$/, "");
+const AI_CHAT_URL = `${AI_BASE_URL}/chat/completions`;
+const AI_MODEL = process.env.AI_MODEL ?? "llama-3.1-8b-instant";
+const AI_MODEL_PROSE = process.env.AI_MODEL_PROSE ?? "llama-3.3-70b-versatile";
+/** The AI key. Falls back to GROQ_API_KEY so existing deploys keep working. */
+const AI_API_KEY = process.env.AI_API_KEY ?? process.env.GROQ_API_KEY;
 
 // Per-IP rate limit: 30 requests per 10 minutes to protect Groq API key spend.
 // In-memory only — resets on process restart (acceptable for local/self-hosted).
@@ -21,16 +36,13 @@ function checkEnhanceRateLimit(req: NextRequest): Response | null {
   enhanceAttempts.set(ip, { count: (current?.count ?? 0) + 1, resetAt: current?.resetAt ?? now + ENHANCE_WINDOW_MS });
   return null;
 }
-const GROQ_MODEL = "llama-3.1-8b-instant";
-const GROQ_MODEL_PROSE = "llama-3.3-70b-versatile";
-
-// Groq bills a request against the per-minute token budget as
-// `prompt_tokens + max_tokens`. On the on_demand tier BOTH models above are
-// capped at 6000 TPM, so any single request that reserves more than that is
-// rejected 413 "Request too large" and can never succeed — no amount of
-// waiting helps. Everything below exists to keep one request under the cap.
-// Override per environment if the org is on a higher tier.
-const TPM_LIMIT = Number(process.env.GROQ_TPM_LIMIT ?? 6000);
+// The provider bills a request against a per-minute token budget as
+// `prompt_tokens + max_tokens`. On Groq's free tier that cap is 6000, so any
+// single request reserving more is rejected 413 and can never succeed — no
+// amount of waiting helps. Everything below keeps one request under the cap.
+// AI_TPM_LIMIT raises it for a roomier tier (NVIDIA free, Groq Developer, etc.);
+// GROQ_TPM_LIMIT is still read for backward compatibility.
+const TPM_LIMIT = Number(process.env.AI_TPM_LIMIT ?? process.env.GROQ_TPM_LIMIT ?? 6000);
 const TPM_SAFETY_MARGIN = 400;
 
 /** Rough token estimate. Groq/Llama averages ~4 chars per token for English. */
@@ -44,8 +56,18 @@ const MAX_OUT_MERGED = 1400;
 const MAX_OUT_FIELDS = 900;
 
 export async function GET() {
-  const available = Boolean(process.env.GROQ_API_KEY);
-  return Response.json({ available, provider: available ? "groq" : null });
+  const available = Boolean(AI_API_KEY);
+  // tpmLimit lets the client throttle pace to THIS provider's budget instead of
+  // a hardcoded 6000 — otherwise a roomier tier (NVIDIA) would still be throttled
+  // as if it were Groq free, and the test would show no improvement.
+  const host = (() => {
+    try {
+      return new URL(AI_BASE_URL).host;
+    } catch {
+      return "unknown";
+    }
+  })();
+  return Response.json({ available, provider: available ? host : null, tpmLimit: TPM_LIMIT });
 }
 
 interface TrainingExample {
@@ -218,10 +240,10 @@ export async function POST(req: NextRequest) {
   const rateLimitHit = checkEnhanceRateLimit(req);
   if (rateLimitHit) return rateLimitHit;
 
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = AI_API_KEY;
   if (!apiKey) {
     return Response.json(
-      { error: "GROQ_API_KEY not configured" },
+      { error: "No AI key configured — set AI_API_KEY (or GROQ_API_KEY)" },
       { status: 503 },
     );
   }
@@ -259,14 +281,14 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "rawText is required" }, { status: 400 });
     }
     try {
-      const res = await fetch(GROQ_URL, {
+      const res = await fetch(AI_CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: GROQ_MODEL_PROSE,
+          model: AI_MODEL_PROSE,
           messages: [
             {
               role: "system",
@@ -284,7 +306,7 @@ export async function POST(req: NextRequest) {
       if (!res.ok) {
         const err = await res.text().catch(() => "");
         return Response.json(
-          { error: `Groq ${res.status}: ${err.slice(0, 200)}` },
+          { error: `AI ${res.status}: ${err.slice(0, 200)}` },
           { status: 502 },
         );
       }
@@ -315,14 +337,14 @@ export async function POST(req: NextRequest) {
   const prompt = buildPrompt(fields, rawText, examples, rules, withObservations);
 
   try {
-    const res = await fetch(GROQ_URL, {
+    const res = await fetch(AI_CHAT_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: GROQ_MODEL,
+        model: AI_MODEL,
         messages: [
           {
             role: "system",
@@ -344,7 +366,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       const err = await res.text().catch(() => "");
       return Response.json(
-        { error: `Groq ${res.status}: ${err.slice(0, 200)}` },
+        { error: `AI ${res.status}: ${err.slice(0, 200)}` },
         { status: 502 },
       );
     }

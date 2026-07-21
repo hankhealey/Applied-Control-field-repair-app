@@ -78,17 +78,34 @@ export const PDF_FIELDS: Array<{ key: keyof ParsedPdfReport; desc: string }> = [
   },
 ];
 
-/** Check whether the server-side AI route is configured (Groq key present). */
-export async function checkAiAvailable(): Promise<boolean> {
+/**
+ * Whether the server-side AI route has a key, plus the active provider's
+ * per-minute token budget and host. The client throttle paces to `tpmLimit`
+ * so a roomier provider (NVIDIA free) is actually exploited instead of being
+ * throttled as if it were still Groq free.
+ */
+export async function checkAiAvailable(): Promise<{
+  available: boolean;
+  tpmLimit?: number;
+  provider?: string;
+}> {
   try {
     const res = await fetch("/api/pdf-enhance", {
       signal: AbortSignal.timeout(3000),
     });
-    if (!res.ok) return false;
-    const data = (await res.json()) as { available?: boolean };
-    return data.available === true;
+    if (!res.ok) return { available: false };
+    const data = (await res.json()) as {
+      available?: boolean;
+      tpmLimit?: number;
+      provider?: string;
+    };
+    return {
+      available: data.available === true,
+      tpmLimit: typeof data.tpmLimit === "number" ? data.tpmLimit : undefined,
+      provider: data.provider ?? undefined,
+    };
   } catch {
-    return false;
+    return { available: false };
   }
 }
 

@@ -153,7 +153,13 @@ export default function ImportPage() {
   }, [entries]);
 
   useEffect(() => {
-    checkAiAvailable().then(setAiAvailable);
+    checkAiAvailable().then(({ available, tpmLimit }) => {
+      setAiAvailable(available);
+      // Pace the throttle to the active provider's real budget. On NVIDIA free
+      // (bigger limit) this lets more than one file fit per minute; on Groq free
+      // it stays 6000. Set once at load — the limit doesn't change mid-session.
+      if (tpmLimit) groqBudget.setLimit(tpmLimit);
+    });
     setExamples(getTrainingExamples());
     try {
       const saved = localStorage.getItem("import-throttle");

@@ -115,6 +115,19 @@ export class TokenBudget {
   reset(): void {
     this.spends = [];
   }
+
+  /**
+   * Repoint the budget at the active provider's real per-minute limit, learned
+   * from the server at load time. Without this the client would pace every
+   * provider to the hardcoded 6000 default — so switching to a roomier tier
+   * (NVIDIA free, Groq Developer) would show no improvement, the throttle still
+   * making files wait as if they were on Groq free.
+   */
+  setLimit(limitPerMin: number): void {
+    if (Number.isFinite(limitPerMin) && limitPerMin > 0) {
+      this.limitPerMin = limitPerMin;
+    }
+  }
 }
 
 /** Shared across the import page so every file paces against one budget. */
